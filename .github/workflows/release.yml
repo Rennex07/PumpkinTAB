@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish as a release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # The same three values as ci.yml, and they have to agree. See the comments
+  # there for why the tag rather than `master`, why WIT_TREE rather than the
+  # version string, and why PUMPKIN_DIR has to match the `[patch.crates-io]`
+  # path in the root Cargo.toml.
+  PUMPKIN_REPO: Pumpkin-MC/Pumpkin
+  PUMPKIN_REF: 0.2.0+26.3-26.51
+  PUMPKIN_DIR: Pumpkin
+  WIT_TREE: e0bb97ea48d9857c181356ba14964d47b20d0f56
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the plugin API the component is built against
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
+          git clone --depth 1 --branch $env:PUMPKIN_REF "https://github.com/$env:PUMPKIN_REPO" $dest
+          "Cloned $env:PUMPKIN_REPO@$env:PUMPKIN_REF into $dest"
+
+      - name: Verify the plugin WIT matches the pinned tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
+          $actual = git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1'
+          "WIT tree: $actual"
+          if ($actual -ne $env:WIT_TREE) {
+            throw "the plugin WIT at $env:PUMPKIN_REF is $actual, not $env:WIT_TREE"
+          }
+
+      - name: Install the wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: >-
+            PumpkinTAB -> target
+            ${{ env.PUMPKIN_DIR }} -> target
+
+      - name: Test
+        run: cargo test
+
+      - name: Build
+        run: cargo build --release --target wasm32-wasip2
+
+      - name: Record the Pumpkin revision
+        id: pumpkin
+        shell: pwsh
+        run: |
+          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
+          "sha=$(git -C $dest rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+          "wit=$(git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1')" >> $env:GITHUB_OUTPUT
+
+      # Attached bare rather than zipped: it is the only file that ships, and a
+      # server admin's next step is to drop it into a `plugins` folder, which is
+      # one click from a `.wasm` and two from a zip.
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: target/wasm32-wasip2/release/pumpkin_tab.wasm
+          body: |
+            Download `pumpkin_tab.wasm` and drop it into your server's
+            `plugins` directory, next to `pumpkin_pie_plugin.wasm` and
+            `pumpkin_perm.wasm` if you use them.
+
+            Built against `${{ env.PUMPKIN_REPO }}@$env:PUMPKIN_REF` at
+            `${{ steps.pumpkin.outputs.sha }}`, plugin WIT
+            `${{ steps.pumpkin.outputs.wit }}`.
+
+            ## On first start, approve the data folder
+
+            PumpkinTAB needs `fs.read.data` and `fs.write.data` for its own
+            `plugins/data/PumpkinTAB` folder. Pumpkin asks for these interactively
+            the first time, and **skips the plugin** if it cannot ask. On a
+            headless server, or any server whose stdin is redirected, pre-approve
+            them in `pumpkin.toml`:
+
+            ```toml
+            [plugins.overrides.PumpkinTAB]
+            allowed_permissions = ["fs.read.data", "fs.write.data"]
+            ```
+
+            ## The tab list is a Java client feature
+
+            The header, the footer, the per-player names, the sort order and the
+            latency bars are Java packets on this Pumpkin build, and a Bedrock
+            client receives none of them. That is the host, not this plugin, and
+            it is vanilla behaviour: the sidebar is built on the world
+            scoreboard, which is also Java-only. Expect the bossbar to work and
+            the tab list not to, on a Bedrock client.
+
+            ## Groups come from a permission plugin, not from here
+
+            `groups:` is a list of names, highest first, and the position *is*
+            the sort order. Membership for a group named `admin` is decided by
+            asking the permission manager about the node PumpkinPerm's
+            `PumpkinPerm:group.admin`. That string is the entire interface:
+            PumpkinPerm grants the node, PumpkinTAB asks about it, and neither
+            plugin calls the other. Point it at any other permission plugin, or
+            at nodes you manage yourself, and PumpkinTAB is unchanged.
+
+            **A mismatch here is silent.** If the names disagree - including by
+            so much as letter case - no player ever matches a group and everyone
+            falls back to `default`, with nothing in the log to say so. Run
+            `/tab groups`; it prints the node each group resolves through.
+
+            ## Compatibility is not by version number
+
+            Pumpkin kept the `0.2.0+26.3-26.51` version string while changing its
+            plugin WIT, so a server and this component can both claim the same
+            version and still disagree. A mismatch shows as
+            `type-checking export func 'handle-event'` and nothing else. If you
+            see that, you are on a server built from a different Pumpkin commit
+            than the one above.
+          fail_on_unmatched_files: true

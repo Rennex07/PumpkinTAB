@@ -1,0 +1,22 @@
+[package]
+name = "pumpkin-tab"
+description = "PumpkinTAB: a tab list plugin for Pumpkin, with groups, sorting, animations, a bossbar and a sidebar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+# A Wasm component, which is what Pumpkin loads.
+crate-type = ["cdylib"]
+
+[dependencies]
+# The library, never `pumpkin-pie-plugin`. Every Pumpkin plugin exports a symbol
+# called `init-plugin`, so linking two crates that export one is a
+# duplicate-symbol error.
+pumpkin-pie = { git = "https://github.com/Rennex07/PumpkinPIE", tag = "v0.2.2" }
+pumpkin-plugin-api = "0.2.0"
+serde.workspace = true
+serde_norway.workspace = true
+tracing.workspace = true

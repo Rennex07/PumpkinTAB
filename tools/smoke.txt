@@ -1,0 +1,12 @@
+tab groups
+tab placeholders
+tab preview %online%/%max_players% online
+tab preview <#ff8800>Admin<reset> plain
+tab preview <red>Admin</red> back to normal
+tab preview 100% off, AT&T, a < b, <3
+tab preview %animation:logo%
+tab preview %animation:nosuch%
+tab preview %perm_group% %nope_nope%
+tab check Rennex
+tab reload
+plugins

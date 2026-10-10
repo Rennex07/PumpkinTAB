@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# The plugin reports this through `CARGO_PKG_VERSION`, so it has to track the
+# release tag. Keep the two in step when cutting a release.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-only"
+authors = ["Rennex"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# A maintained fork of the archived `serde_yaml`, same API, and it compiles for
+# `wasm32-wasip2` where a dependency on libc would not.
+serde_norway = "0.9"
+tracing = "0.1"
+
+# The published `pumpkin-plugin-api` is behind the server: its WIT no longer
+# matches, and a component built against it fails to load with
+# "type-checking export func `handle-event`". Build against a local checkout
+# instead.
+#
+# A component only loads on a server built from a commit with the same
+# `crates/pumpkin-plugin-wit/v0.1` tree, and the version string cannot be used to
+# check that: Pumpkin kept `0.2.0+26.3-26.51` across a WIT change. Bumping a
+# Pumpkin release means changing this path, `PUMPKIN_DIR` and `PUMPKIN_REF` in the
+# workflows, and `WIT_TREE` in the workflows, all together - CI checks the tree
+# and fails if it drifts, because a green build does not catch a WIT change.
+#
+# The directory is `../Pumpkin` so it matches `PUMPKIN_DIR` in ci.yml and
+# release.yml, which clone the checkout there. A name that does not match makes
+# the build resolve nothing and fail as if the crate were simply absent.
+#
+# Verified for this path: tag `0.2.0+26.3-26.51`, commit
+# `204a94ed895f041a845630d5a23c094705a0704e`, WIT tree
+# `e0bb97ea48d9857c181356ba14964d47b20d0f56`. HEAD of that checkout
+# (`112c463dac442a03110a6c4c21eabd6ea59a9a5e`, nightly-10) resolves the same
+# tree, so the local build and the pinned release agree.
+[patch.crates-io]
+pumpkin-plugin-api = { path = "../Pumpkin/crates/pumpkin-plugin-api" }
+
+# A plugin is a component, not a native library, so the size of the artifact is
+# the thing worth trading build speed for.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
