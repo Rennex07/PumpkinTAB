@@ -68,6 +68,170 @@ pub struct Superseded {
 /// the build rather than sitting here looking plausible.
 pub const SUPERSEDED_CONFIGS: &[Superseded] = &[
     Superseded {
+        label: "the default whose tab-list.format started with %perm_prefix%",
+        // The file as it was before %perm_prefix% was taken out of 	ab-list.format.
+        // PumpkinPerm is not on the market any more, so the shipped default has to
+        // work on a server with nothing else installed - and an unanswered placeholder
+        // is deliberately left as written rather than blanked, so without this entry
+        // every untouched install would show a literal %perm_prefix% in front of
+        // every name.
+        text: r####"# PumpkinTAB - the tab list, header, footer, bossbar and sidebar.
+#
+# Placeholders (all work with no other plugin):
+#   %player% %viewer% %ping% %playtime% %world% %uuid% %health% %gamemode%
+#   %player_ip% %bedrock% %permission_level% %group%
+#   %online% %max_players% %worldonline% %server_name% %tps% %mspt%
+#   %server_time% %time% %server_date% %date%
+#   %animation:<name>%  %condition:<name>%
+# Anything else goes to PumpkinPIE (optional). Nothing that cannot answer is
+# blanked - it is left as written, so a typo shows up.
+#
+# Colours `<red>`..`<white>`, `<#e0b11e>`; styles `<bold>` `<italic>` `<reset>` and
+# `<bold:false>`; `<gradient:#a:#b>` `<rainbow>`. `&7` codes work too.
+#
+# Written once. Rewritten only if still a byte-for-byte copy of an older default
+# that shipped - edit anything, even a comment, and it is yours.
+
+refresh-interval-ticks: 20
+
+# Whole hours to add to UTC for %time% / %server_time% / %date% /
+# %server_date%. `7` for UTC+7, `-5` for UTC-5, `0` to leave it on UTC.
+#
+# This has to be set by hand: there is no clock, timezone or config read
+# anywhere in the plugin API - `server.wit` offers `get-motd` and `get-tps` and
+# not one time call - and the only clock a WASI plugin has reads UTC. So the
+# sidebar would otherwise show a different hour from the server log sitting
+# right next to it. Whole hours only, and no daylight saving: both would need a
+# timezone database, which is the same thing that cannot be read.
+#
+# Times print as `7:04:11 PM`.
+utc-offset-hours: 0
+
+# The overlay has a fixed height: overflow it and the tab list is drawn on top of
+# the header instead of below it, which looks like a doubled name and a bar
+# cutting through the text. This design spends eight rows on header + footer, so
+# trim the two '' spacers first if the list ever collides with the header.
+header-footer:
+  enabled: true
+  header:
+    # A rule across the top, drawn by striking through a run of spaces. Widen it
+    # if the widest row below outgrows it.
+    - '<dark_gray>&m                                      &r'
+    - '<aqua><bold>✦ YOURSERVER <reset>✦'
+    # Small caps, not plain capitals: these are Unicode small-capital letters, the
+    # same trick Java TAB's shipped config uses. Substitute your own domain.
+    - '<white>ᴘʟᴀʏ.ʏᴏᴜʀꜱᴇʀᴠᴇʀ.ᴄᴏᴍ'
+    - ''
+  # No name and no %ping% here: the entry row between the header and the footer
+  # already carries all three, and repeating them prints each one twice in one
+  # glance. %ping% never resolves on Bedrock either - the host only measures
+  # latency on the Java keep-alive - and %bedrock% is what tells you so.
+  footer:
+    - ''
+    - '<aqua>/ᴅɪꜱᴄᴏʀᴅ /ꜱᴛᴏʀᴇ /ᴠᴏᴛᴇ'
+    - ''
+    - '<#D4D4D4>ᴄᴜʀʀᴇɴᴛʟʏ <white>%online%<#D4D4D4> %condition:players% ᴀʀᴇ ᴄᴏɴɴᴇᴄᴛᴇᴅ'
+  disabled-worlds: []
+
+tab-list:
+  enabled: true
+  # %perm_prefix% needs PumpkinPerm AND PumpkinPIE, or it stays as written.
+  format: '%perm_prefix%%player% <gray>Ping: <white>%ping%ms'
+  disabled-worlds: []
+
+# Highest first, and the position IS the sort order. Keep it the same order as
+# PumpkinPerm's weights - nothing reads their weights, so nothing catches a drift.
+groups:
+  - owner
+  - admin
+  - moderator
+  - vip
+  - default
+
+# Lets op count as a group with nobody running /pumpkinperm set. Delete the
+# section and op means nothing here.
+op-level-groups:
+  four: owner
+  two: admin
+
+# change-interval is in ms and a frame may itself be a template. It must be a
+# whole multiple of the refresh or the client skips frames out of order: a frame
+# is picked once per refresh and never in between.
+animations:
+  logo:
+    change-interval: 1000
+    texts:
+      - '&d-&3--------------'
+      - '&3-&d-&3-------------'
+      - '&3--&d-&3------------'
+      - '&3---&d-&3-----------'
+      - '&3----&d-&3----------'
+      - '&3-----&d-&3---------'
+      - '&3------&d-&3--------'
+      - '&3-------&d-&3-------'
+      - '&3--------&d-&3------'
+      - '&3---------&d-&3-----'
+      - '&3----------&d-&3----'
+      - '&3-----------&d-&3---'
+      - '&3------------&d-&3--'
+      - '&3-------------&d-&3-'
+      - '&3--------------&d-'
+      - '&3-------------&d-&3-'
+      - '&3------------&d-&3--'
+      - '&3-----------&d-&3---'
+      - '&3----------&d-&3----'
+      - '&3---------&d-&3-----'
+      - '&3--------&d-&3------'
+      - '&3-------&d-&3-------'
+      - '&3------&d-&3--------'
+      - '&3-----&d-&3---------'
+      - '&3----&d-&3----------'
+      - '&3---&d-&3-----------'
+      - '&3--&d-&3------------'
+      - '&3-&d-&3-------------'
+
+  clock:
+    change-interval: 3000
+    texts:
+      - '&7Time &b%server_time%'
+      - '&7Date &b%server_date%'
+
+  barcolors:
+    change-interval: 1000
+    texts:
+      - 'RED'
+      - 'BLUE'
+      - 'GREEN'
+      - 'YELLOW'
+
+# A named test used as %condition:<name>%. Same shape as Java TAB's, except the
+# two answers are `true:` / `false:` where TAB writes `yes:` / `no:`.
+# `conditions:` is a list; two or more need `type: AND` (the default) or `type:
+# OR`. Comparators: >= > <= < = != <- !<- |- !|- -| !-| plus permission:<node>; a
+# non-number side counts as 0. A condition sees only the placeholders above, so a
+# test on %perm_group% compares that literal text.
+#
+# Used by the footer's player/players wording.
+conditions:
+  players:
+    conditions:
+      - '%online%<2'
+    true: 'ᴘʟᴀʏᴇʀ'
+    false: 'ᴘʟᴀʏᴇʀꜱ'
+
+bossbar:
+  enabled: false
+  title: '&b%server_name% &8| &7%online% online'
+  # pink blue red green yellow purple white, or a template.
+  color: '%animation:barcolors%'
+  # 0.0-1.0, then no-division notches6 notches10 notches12 notches20.
+  health: 1.0
+  division: 'no-division'
+  disabled-worlds: []
+"####,
+    },
+
+    Superseded {
         label: "the default whose clock was 24-hour UTC with no offset",
         // The file as it was before `utc-offset-hours` was added and the clock
         // switched to 12-hour with an AM/PM meridiem. Without this entry the
@@ -1581,12 +1745,14 @@ fn a_sidebar_can_still_be_switched_on_by_hand() {
     );
 }
 
-/// The screenshot case: the shipped tab format asks PumpkinPerm for a prefix,
-/// which arrives through PumpkinPIE. Neither is required, and the entry must
-/// still be worth reading without them - which is what this holds. A prefix
-/// that cannot be resolved is left on screen as `%perm_prefix%` beside the
-/// name, so an admin sees exactly which placeholder is unanswered, instead of a
-/// blank entry that reads as a plugin that did not load.
+/// The shipped tab format must name the player with nothing else installed,
+/// because an optional plugin that does not answer a placeholder does not blank
+/// it: it is left on screen exactly as written, so a missing TurtlePerm reads
+/// as a literal `%perm_prefix%` in front of every name.
+///
+/// `%perm_prefix%` is therefore documented in the file rather than shipped, and
+/// the two halves of that are pinned separately: the format carries no optional
+/// placeholder, and the file still says where to get one.
 #[test]
 fn the_shipped_tab_format_still_names_the_player_without_any_other_plugin() {
     let config = Config::parse(DEFAULT_CONFIG).expect("valid");
@@ -1596,8 +1762,15 @@ fn the_shipped_tab_format_still_names_the_player_without_any_other_plugin() {
          prefix: {}",
         config.tab_list.format
     );
-    // And the dependency is named in the file itself, so the fix is in reach of
-    // whoever hits it rather than being a thing to work out from a symptom.
+    for optional in ["%perm_prefix%", "%perm_suffix%", "%perm_group%", "%balance%"] {
+        assert!(
+            !config.tab_list.format.contains(optional),
+            "the shipped tab format uses {optional}, which stays as written until PumpkinPerm \
+             and PumpkinPIE are both loaded: {}",
+            config.tab_list.format
+        );
+    }
+    // And the opt-in is in the file itself, so it is in reach of whoever wants it.
     assert!(
         DEFAULT_CONFIG.contains("%perm_prefix%"),
         "the shipped file must still say where %perm_prefix% comes from"

@@ -68,9 +68,10 @@
 //!   The tag is consumed and no code is written.
 //!
 //! The second rule is the one that is not obvious, and it exists because of this
-//! plugin's own default: `tab-list.format` is `%perm_prefix%%player%`, so the
-//! text converted from a prefix is followed by *more of the same plugin's
-//! template*. A LuckPerms-style prefix `<red><bold>[Admin] </bold>` converted to
+//! plugin's own use of a prefix: `tab-list.format` is documented with
+//! `%perm_prefix%` in front of `%player%`, so the text converted from a prefix is
+//! followed by *more of the same plugin's template*. A LuckPerms-style prefix
+//! `<red><bold>[Admin] </bold>` converted to
 //! `&c&l[Admin] &r<name>` leaves the name white, which is the opposite of what
 //! the prefix asked for and is why a configured prefix "does not work" on the tab
 //! list. Dropping the code leaves the colour the prefix opened still open.

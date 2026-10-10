@@ -58,8 +58,15 @@ header-footer:
 
 tab-list:
   enabled: true
-  # %perm_prefix% needs PumpkinPerm AND PumpkinPIE, or it stays as written.
-  format: '%perm_prefix%%player% <gray>Ping: <white>%ping%ms'
+  # The name and the ping, and nothing either of them needs another plugin for.
+  #
+  # For a rank prefix, put `%perm_prefix%` in front:
+  #   format: '%perm_prefix%%player% <gray>Ping: <white>%ping%ms'
+  # It is answered by PumpkinPerm and delivered by PumpkinPIE, and it stays as
+  # written when neither is loaded - so a tab list reads `%perm_prefix%Steve`
+  # until they are. That is why it is not shipped here: the shipped default has
+  # to work on a server with nothing else installed.
+  format: '%player% <gray>Ping: <white>%ping%ms'
   disabled-worlds: []
 
 # Highest first, and the position IS the sort order. Keep it the same order as
