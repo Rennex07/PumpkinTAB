@@ -1163,6 +1163,14 @@ impl HeaderFooter {
 }
 
 /// Each player's own entry in the list.
+/// A `bool` that defaults to on, for keys where the shipped default is `true`.
+///
+/// `serde`'s `#[serde(default)]` would use `false`, and these keys are the ones a
+/// server that has never written them should get switched on.
+fn default_on() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TabList {
@@ -1170,6 +1178,20 @@ pub struct TabList {
     pub enabled: bool,
     /// The template for it.
     pub format: String,
+    /// Whether to drop a leading `%perm_prefix%` from the format's output when
+    /// nothing answers it.
+    ///
+    /// `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and an optional plugin
+    /// that is not installed is not a typo. Whereas an unknown placeholder is left
+    /// as written so a spelling mistake is visible, this one is a known optional
+    /// dependency, so a server running neither shows a bare name instead of a
+    /// literal `%perm_prefix%` in front of every player.
+    ///
+    /// Only the prefix is blanked. Anything else left unresolved is still left as
+    /// written, so the log line naming `%perm_prefix%` as unanswered is the one
+    /// signal that turns it off.
+    #[serde(default = "default_on")]
+    pub prefix_optional: bool,
     /// Worlds to leave alone. Empty means every world.
     pub disabled_worlds: Vec<String>,
 }
@@ -1179,6 +1201,7 @@ impl Default for TabList {
         Self {
             enabled: true,
             format: "%player%".to_string(),
+            prefix_optional: true,
             disabled_worlds: Vec::new(),
         }
     }
@@ -1745,16 +1768,17 @@ fn a_sidebar_can_still_be_switched_on_by_hand() {
     );
 }
 
-/// The shipped tab format must name the player with nothing else installed,
-/// because an optional plugin that does not answer a placeholder does not blank
-/// it: it is left on screen exactly as written, so a missing TurtlePerm reads
-/// as a literal `%perm_prefix%` in front of every name.
+/// The shipped tab format asks PumpkinPerm for a prefix, which arrives through
+/// PumpkinPIE. Neither is required: `prefix-optional` blanks the placeholder when
+/// nothing answers it, so a server with neither reads `blockrnc  Ping: 42ms`
+/// rather than a literal `%perm_prefix%`.
 ///
-/// `%perm_prefix%` is therefore documented in the file rather than shipped, and
-/// the two halves of that are pinned separately: the format carries no optional
-/// placeholder, and the file still says where to get one.
+/// That is the one placeholder blanked rather than left as written. Every other
+/// unresolved placeholder is still left on screen, because a typo has to be
+/// visible - and the log line naming `%perm_prefix%` unanswered is what points at
+/// a missing plugin rather than a spelling mistake.
 #[test]
-fn the_shipped_tab_format_still_names_the_player_without_any_other_plugin() {
+fn the_shipped_tab_format_works_with_or_without_the_permission_plugin() {
     let config = Config::parse(DEFAULT_CONFIG).expect("valid");
     assert!(
         config.tab_list.format.contains("%player%"),
@@ -1762,19 +1786,40 @@ fn the_shipped_tab_format_still_names_the_player_without_any_other_plugin() {
          prefix: {}",
         config.tab_list.format
     );
-    for optional in ["%perm_prefix%", "%perm_suffix%", "%perm_group%", "%balance%"] {
-        assert!(
-            !config.tab_list.format.contains(optional),
-            "the shipped tab format uses {optional}, which stays as written until PumpkinPerm \
-             and PumpkinPIE are both loaded: {}",
-            config.tab_list.format
-        );
-    }
-    // And the opt-in is in the file itself, so it is in reach of whoever wants it.
     assert!(
-        DEFAULT_CONFIG.contains("%perm_prefix%"),
-        "the shipped file must still say where %perm_prefix% comes from"
+        config.tab_list.format.contains("%perm_prefix%"),
+        "the shipped format carries the prefix, because it blanks when nothing answers it"
     );
+    assert!(
+        config.tab_list.prefix_optional,
+        "without this the shipped format leaves a literal placeholder on a bare server"
+    );
+}
+
+/// The upgrade case, and the reason `prefix-optional` has a `default = "default_on"`
+/// rather than `#[serde(default)]`.
+///
+/// A `config.yml` written before the key existed has no `prefix-optional:` line,
+/// so it must still come back `true` - an install that shipped with a
+/// `%perm_prefix%` in its format and then loaded this build otherwise starts
+/// showing the literal placeholder with no explanation.
+#[test]
+fn a_config_written_before_prefix_optional_still_blanks_the_prefix() {
+    let config = Config::parse(
+        "groups: [default]\ntab-list:\n  format: '%perm_prefix%%player%'\n",
+    )
+    .expect("valid");
+    assert!(
+        config.tab_list.prefix_optional,
+        "an older config must not silently start showing the literal placeholder"
+    );
+
+    // And an admin who wants it left as written can still say so.
+    let config = Config::parse(
+        "groups: [default]\ntab-list:\n  format: '%player%'\n  prefix-optional: false\n",
+    )
+    .expect("valid");
+    assert!(!config.tab_list.prefix_optional);
 }
 
 /// At the default 1000 ms refresh a 100 ms animation of 14 frames advances 10

@@ -65,7 +65,7 @@ use tracing::debug;
 
 use crate::{
     bossbar, groups, pie, playtime,
-    render::View,
+    render::{self, View},
     scoreboard as board,
     state::{self, Snapshot},
     text,
@@ -357,7 +357,13 @@ fn push_player(player: &Player, row: &Row, resolved: &[String], config: &crate::
     // It is pushed anyway: the host keeps a separate `tab_list_latency` field that
     // starts at 0, so not pushing it leaves every client showing no bars at all.
     player.set_tab_list_latency(player.get_ping() as i32);
-    player.set_tab_list_name(Some(component(&at(resolved, row.slots[2]))));
+    let entry = at(resolved, row.slots[2]);
+    let entry = if config.tab_list.prefix_optional {
+        render::blank_unresolved_prefix(&entry)
+    } else {
+        entry
+    };
+    player.set_tab_list_name(Some(component(&entry)));
 }
 
 /// One sidebar row: the player's team, their score, and the text beside it.

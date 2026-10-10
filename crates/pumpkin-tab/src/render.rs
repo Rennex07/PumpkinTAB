@@ -430,6 +430,36 @@ pub fn count_placeholders(text: &str) -> usize {
         .count()
 }
 
+/// The prefix that is a known optional dependency rather than a spelling mistake.
+///
+/// `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and a server running neither
+/// is a supported configuration - so an unanswered one is blanked rather than left
+/// as written. Every other placeholder keeps the "leave it as written" rule, so a
+/// typo is still visible.
+pub const OPTIONAL_PREFIX: &str = "perm_prefix";
+
+/// Removes an unresolved `%perm_prefix%` from a rendered tab entry.
+///
+/// A resolved prefix comes back as `§`-coded text and never matches, so this only
+/// ever removes the literal placeholder. It removes every occurrence rather than
+/// just a leading one because a format may place it after a name, and a half
+/// blanked entry reads worse than a fully blanked one.
+///
+/// Returns the input untouched when the prefix is not there, which is the common
+/// case and the reason this is cheap enough to run per player per refresh.
+pub fn blank_unresolved_prefix(rendered: &str) -> String {
+    if !rendered.contains(OPTIONAL_PREFIX) {
+        return rendered.to_string();
+    }
+    rendered
+        // A trailing space goes with the placeholder, or a middle-placed prefix
+        // leaves a double space.
+        .replace(&format!("%{OPTIONAL_PREFIX}% "), "")
+        .replace(&format!("%{OPTIONAL_PREFIX}%"), "")
+        .trim()
+        .to_string()
+}
+
 /// The `%name%` still in `text`, without the `%` signs, in the order written.
 ///
 /// Owned rather than borrowed, because [`text::segment`] hands back the names by
@@ -1162,6 +1192,51 @@ mod tests {
                 "hour {hour} printed {shown}"
             );
         }
+    }
+
+    #[test]
+    fn an_unresolved_optional_prefix_is_blanked_but_a_typo_is_not() {
+        // The shipped case: no PumpkinPerm, no PumpkinPIE.
+        assert_eq!(
+            blank_unresolved_prefix("%perm_prefix%blockrnc  Ping: 42ms"),
+            "blockrnc  Ping: 42ms"
+        );
+        // A resolved one is `§`-coded and never matches, so it survives whole.
+        assert_eq!(
+            blank_unresolved_prefix("\u{a7}7\u{a7}l[MEMBER] blockrnc"),
+            "\u{a7}7\u{a7}l[MEMBER] blockrnc"
+        );
+        // Every other placeholder keeps the leave-it-as-written rule.
+        assert_eq!(
+            blank_unresolved_prefix("%perm_prefix%%nope_nope%Steve"),
+            "%nope_nope%Steve"
+        );
+        // Nothing to do is the common case and must not reallocate meaningfully.
+        assert_eq!(blank_unresolved_prefix("just a name"), "just a name");
+    }
+
+    #[test]
+    fn an_unresolved_prefix_is_removed_wherever_the_format_puts_it() {
+        assert_eq!(
+            blank_unresolved_prefix("Steve %perm_prefix%"),
+            "Steve"
+        );
+        // Not at the start, so there is no leading space to trim.
+        assert_eq!(
+            blank_unresolved_prefix("Rank: %perm_prefix% - Steve"),
+            "Rank: - Steve"
+        );
+    }
+
+    #[test]
+    fn a_confusable_name_is_not_blanked() {
+        // `perm_prefix` on its own is not the placeholder, and neither is a
+        // placeholder that merely starts with it.
+        assert_eq!(blank_unresolved_prefix("perm_prefix is a word"), "perm_prefix is a word");
+        assert_eq!(
+            blank_unresolved_prefix("%perm_prefix_extra%Steve"),
+            "%perm_prefix_extra%Steve"
+        );
     }
 
     // ---- conditions -------------------------------------------------------
