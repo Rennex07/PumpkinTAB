@@ -71,6 +71,19 @@ jobs:
           "sha=$(git -C $dest rev-parse HEAD)" >> $env:GITHUB_OUTPUT
           "wit=$(git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1')" >> $env:GITHUB_OUTPUT
 
+      # The Market wants the version without a leading `v`, and the tag carries
+      # one. `inputs.tag` takes priority because a `workflow_dispatch` run has no
+      # tag ref at all: `GITHUB_REF_NAME` is the branch name there, so a manual
+      # run would publish a version literally called `main`.
+      - name: Record the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.tag }}"
+          if (-not $version) { $version = $env:GITHUB_REF_NAME }
+          $version = $version -replace '^v', ''
+          "value=$version" >> $env:GITHUB_OUTPUT
+
       # Attached bare rather than zipped: it is the only file that ships, and a
       # server admin's next step is to drop it into a `plugins` folder, which is
       # one click from a `.wasm` and two from a zip.
@@ -134,3 +147,44 @@ jobs:
             see that, you are on a server built from a different Pumpkin commit
             than the one above.
           fail_on_unmatched_files: true
+
+      # The Market listing, updated from the same file that just became the
+      # release. `plugin-id` is the listing's public ID from
+      # https://market.pumpkinmc.org/plugin/s2zRayDY-pumpkintab, used instead of
+      # `plugin-name` because a name match breaks on an edit nobody notices.
+      #
+      # Needs `MARKET_API_TOKEN` in the repository secrets, scoped
+      # `plugins:update` and `plugins:versions:upload`. Without it the step
+      # fails, which is deliberate: a release that silently skips the Market is a
+      # release nobody can find.
+      - name: Publish to the Pumpkin Market
+        uses: filiphsps/pumpkin-plugins/actions/publish-to-pumpkin-market@publish-to-pumpkin-market-v0.0.4
+        with:
+          plugin-id: s2zRayDY
+          version: ${{ steps.version.outputs.value }}
+          wasm-file: target/wasm32-wasip2/release/pumpkin_tab.wasm
+          api-token: ${{ secrets.MARKET_API_TOKEN }}
+          track: stable
+          release-notes: |
+            Built against `${{ env.PUMPKIN_REPO }}@$env:PUMPKIN_REF` at
+            `${{ steps.pumpkin.outputs.sha }}`, plugin WIT
+            `${{ steps.pumpkin.outputs.wit }}`.
+
+            Groups come from a permission plugin rather than from here. `groups:`
+            is a list of names, highest first, and the position *is* the sort
+            order. Membership for a group named `admin` is decided by asking the
+            permission manager about `PumpkinPerm:group.admin`. If the names
+            disagree no player ever matches a group and everyone falls back to
+            `default`, with nothing in the log to say so - run `/tab groups` to
+            print the node each one resolves through.
+
+            `%perm_prefix%` is removed automatically when PumpkinPerm is not
+            installed, so the tab list works on a server with nothing else
+            alongside it. Pair with PumpkinPIE and PumpkinPerm for rank prefixes
+            and any other placeholder.
+
+            Compatibility is not by version number. Pumpkin kept the
+            `${{ env.PUMPKIN_REF }}` version string while changing its plugin WIT,
+            so a server and this component can both claim the same version and
+            still disagree. A mismatch shows as `type-checking export func
+            'handle-event'` and nothing else.
