@@ -20,6 +20,11 @@
 //! is missing. [`crate::pie`] names what is still unresolved, at a rate an admin
 //! can read.
 //!
+//! The one exception is a name the admin listed in `tab-list.autohide`, which is
+//! removed instead - see [`hide_unresolved`]. That is opt-in, and it exists for a
+//! placeholder whose absence is a supported configuration rather than a
+//! misspelling.
+//!
 //! ## Conditional placeholders
 //!
 //! The syntax is TAB's, from
@@ -78,13 +83,6 @@
 //! `CPlayerInfoUpdate` is dropped by `send-packet` (`player.rs:3577-3581`), so
 //! there are no fake players to ask about and no offline player to ask for.
 //!
-//! `%playtime%` is the deliberate exception, and it is worth being exact about
-//! why it is not the same thing: the host is never asked anything. It is answered
-//! from this plugin's own `playtime.yml`, counted by [`crate::playtime`] from the
-//! refresh loop that only ever sees connected players. (`%health%` is in the same
-//! position - a live read of the player in front of you - and `%playtime%` is the
-//! one live read that is remembered afterwards.)
-//!
 //! ## Why there is no per-placeholder cache
 //!
 //! The design called for one: an expensive placeholder on a slower interval than
@@ -116,7 +114,6 @@ use pumpkin_plugin_api::player::Player;
 
 use crate::{
     config::{Animation, Config},
-    playtime,
     text::{self, Segment},
 };
 
@@ -145,38 +142,20 @@ pub const MAX_DEPTH: u8 = 2;
 /// Documented in the shipped `config.yml` as well; this list is what actually
 /// answers, and [`BUILT_IN_ALIASES`] are in it because an alias answers just as
 /// much as a first-class name does.
-pub const BUILT_INS: [&str; 22] = [
-    "player",
-    "viewer",
-    "ping",
-    "playtime",
-    "world",
-    "uuid",
-    "permission_level",
-    "health",
-    "gamemode",
-    "player_ip",
-    "bedrock",
-    "group",
-    "online",
-    "max_players",
-    "worldonline",
-    "server_name",
-    "server_time",
-    "server_date",
-    "time",
-    "date",
-    "tps",
+pub const BUILT_INS: [&str; 17] = [
+    "player", "viewer", "ping", "world", "uuid", "permission_level", "health", "gamemode",
+    "player_ip", "bedrock", "group", "online", "max_players", "worldonline", "server_name", "tps",
     "mspt",
 ];
 
 /// Names written differently from the built-in they resolve to.
 ///
-/// TAB.java calls the clock `%time%` and the date `%date%`, and a config written
-/// for TAB should not have to be edited to work here. They are a table rather
-/// than second match arms so that there is still exactly one arm per *value*,
-/// and [`the_every_alias_points_at_a_built_in`] is what keeps the table honest.
-pub const BUILT_IN_ALIASES: [(&str, &str); 2] = [("time", "server_time"), ("date", "server_date")];
+/// Empty, and the loop below it cannot tell an empty list from a passing one.
+/// TAB.java calls the clock `%time%` and
+/// the date `%date%`, and a config written for TAB used to work here unchanged;
+/// the clock is gone now, so those spellings have nothing to answer them. See the
+/// module header.
+pub const BUILT_IN_ALIASES: [(&str, &str); 0] = [];
 
 /// The built-in `name` really answers, following [`BUILT_IN_ALIASES`].
 pub fn canonical_built_in(name: &str) -> &str {
@@ -306,21 +285,6 @@ impl View<'_> {
                 0 => None,
                 millis => Some(millis.to_string()),
             }),
-            // How long they have been connected, across every session, kept in
-            // `playtime.yml` by [`crate::playtime`].
-            //
-            // **Never [`None`] for a player it can see**, which is the one place
-            // this differs from `ping` above: zero playtime is a fact about a
-            // brand-new player rather than a reading that has not arrived yet, so
-            // it prints `0s`. Answering `None` would leave `%playtime%` sitting
-            // on screen in exactly the shape of a typo, for every joiner, on
-            // their first second.
-            //
-            // A template with **no player** still gets [`None`], the same as every
-            // other per-player placeholder here - which is what stops a
-            // server-wide header or a fixed sidebar row from inventing a number
-            // for whoever happens to be looking.
-            "playtime" => player.map(playtime::of),
             "world" => player.map(|player| player.get_world().get_name()),
             "uuid" => player.map(|player| pumpkin_plugin_api::uuid::to_string(player.get_id())),
             // The op level, as the number the config uses, so
@@ -355,8 +319,6 @@ impl View<'_> {
                     .to_string()
             }),
             "server_name" => Some(self.server.get_motd()),
-            "server_time" => Some(world_clock().format_time(self.config.utc_offset_hours)),
-            "server_date" => Some(world_clock().format_date(self.config.utc_offset_hours)),
             // **Clamped, and not by choice.** The host computes `get_tps()` as
             // `1000.0 / mspt` with no ceiling (`server/mod.rs:1213`), so a server
             // doing 3.84 ms a tick reports `260.61`. That is the tick rate it
@@ -430,34 +392,66 @@ pub fn count_placeholders(text: &str) -> usize {
         .count()
 }
 
-/// The prefix that is a known optional dependency rather than a spelling mistake.
+/// Removes every `autohide` placeholder that came back unresolved.
 ///
-/// `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and a server running neither
-/// is a supported configuration - so an unanswered one is blanked rather than left
-/// as written. Every other placeholder keeps the "leave it as written" rule, so a
-/// typo is still visible.
-pub const OPTIONAL_PREFIX: &str = "perm_prefix";
-
-/// Removes an unresolved `%perm_prefix%` from a rendered tab entry.
+/// A resolved one arrives as `§`-coded text and never matches, so this only ever
+/// removes the literal placeholder. Only the listed names are touched: anything
+/// else left unresolved is still left as written, so a typo stays visible and the
+/// log line naming it still fires.
 ///
-/// A resolved prefix comes back as `§`-coded text and never matches, so this only
-/// ever removes the literal placeholder. It removes every occurrence rather than
-/// just a leading one because a format may place it after a name, and a half
-/// blanked entry reads worse than a fully blanked one.
+/// The list exists for a placeholder whose absence is a *supported configuration*
+/// rather than a misspelling - `%perm_prefix%` needs PumpkinPerm and PumpkinPIE,
+/// and a server running neither is not misconfigured. Configurable as
+/// `tab-list.autohide`, which defaults to `perm_prefix` so the behaviour ships
+/// without being written down.
 ///
-/// Returns the input untouched when the prefix is not there, which is the common
-/// case and the reason this is cheap enough to run per player per refresh.
-pub fn blank_unresolved_prefix(rendered: &str) -> String {
-    if !rendered.contains(OPTIONAL_PREFIX) {
+/// Returns the input untouched when the text holds no placeholder at all, which
+/// is the common case and the reason this is cheap enough to run per text per
+/// refresh.
+pub fn hide_unresolved(rendered: &str, autohide: &[String]) -> String {
+    if autohide.is_empty() || !rendered.contains('%') {
         return rendered.to_string();
     }
-    rendered
-        // A trailing space goes with the placeholder, or a middle-placed prefix
-        // leaves a double space.
-        .replace(&format!("%{OPTIONAL_PREFIX}% "), "")
-        .replace(&format!("%{OPTIONAL_PREFIX}%"), "")
-        .trim()
-        .to_string()
+    let mut out = rendered.to_string();
+    for name in autohide {
+        // The config spells a placeholder the way it appears in a template,
+        // `%perm_prefix%`, while the name itself is `perm_prefix`. Both spellings
+        // are stripped to the bare name here, because an admin copying a
+        // placeholder out of `format:` writes the wrapped one and an autohide
+        // that silently matched nothing would look exactly like one that is off.
+        let name = name.trim_matches('%');
+        if name.is_empty() {
+            continue;
+        }
+        // A trailing space goes with the placeholder, or a middle-placed one
+        // leaves a double space behind.
+        let padded = format!("%{name}% ");
+        if out.contains(&padded) {
+            out = out.replace(&padded, "");
+        }
+        let bare = format!("%{name}%");
+        if out.contains(&bare) {
+            out = out.replace(&bare, "");
+        }
+    }
+
+    // **Only** trim when something was actually removed, and only the single
+    // space that came off with the placeholder rather than both ends.
+    //
+    // This runs on the header and footer as well as on a tab entry, and those
+    // are a block of joined lines: a header ending in a blank spacer arrives
+    // with a trailing `\n` that is a real, intended empty row. Trimming
+    // unconditionally deleted those rows - but only when the block also held a
+    // `%`, so the same header kept its spacer until an unrelated placeholder
+    // elsewhere in it stopped resolving. That is worse than either behaviour.
+    let removed = out != rendered;
+    if removed {
+        // A placeholder at the very start leaves the space that followed it, and
+        // one at the very end leaves the space before it.
+        out = out.strip_prefix(' ').unwrap_or(&out).to_string();
+        out = out.strip_suffix(' ').unwrap_or(&out).to_string();
+    }
+    out
 }
 
 /// The `%name%` still in `text`, without the `%` signs, in the order written.
@@ -477,96 +471,6 @@ pub fn placeholder_names(text: &str) -> Vec<String> {
             Segment::Text(_) => None,
         })
         .collect()
-}
-
-/// The wall clock, read through [`std::time`], which WASI preview 2 supplies and
-/// the host does not touch. Always UTC - see [`Config::utc_offset_hours`].
-///
-/// [`Config::utc_offset_hours`]: crate::config::Config::utc_offset_hours
-struct WorldClock;
-
-fn world_clock() -> WorldClock {
-    WorldClock
-}
-
-/// Seconds since midnight, as `h:MM:SS AM` or `h:MM:SS PM`.
-///
-/// Takes no clock of its own so the boundaries can be pinned exactly: midnight
-/// and noon are the two hours a 12-hour formatter gets wrong, and a formatter
-/// reading "now" can never reach either in a test.
-fn format_seconds(seconds: u64) -> String {
-    let (hour24, minute, second) = (seconds / 3600, (seconds / 60) % 60, seconds % 60);
-    let meridiem = if hour24 < 12 { "AM" } else { "PM" };
-    // 0 and 12 are the two hours that are not what they look like: midnight is
-    // 12 AM and noon is 12 PM.
-    let hour12 = match hour24 % 12 {
-        0 => 12,
-        other => other,
-    };
-    format!("{hour12}:{minute:02}:{second:02} {meridiem}")
-}
-
-impl WorldClock {
-    /// Seconds since local midnight in `offset_hours`, as `h:MM:SS AM` or
-/// `h:MM:SS PM`.
-fn format_time(&self, offset_hours: i32) -> String {
-    format_seconds(self.seconds_since_midnight(offset_hours))
-}
-
-    /// `YYYY-MM-DD`, shifted by `offset_hours` from UTC.
-    ///
-    /// Shifted from the epoch rather than from midnight, so a zone behind UTC
-    /// crossing midnight backwards rolls the date back too - which is the whole
-    /// point of applying an offset at all.
-    fn format_date(&self, offset_hours: i32) -> String {
-        let (year, month, day) = civil_from_days(self.days_since_epoch(offset_hours));
-        format!("{year:04}-{month:02}-{day:02}")
-    }
-
-    fn unix_seconds(&self) -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs() as i64)
-    }
-
-    /// Seconds since local midnight, wrapping into a day.
-    ///
-    /// `rem_euclid` rather than `%`, because a negative offset takes the clock
-    /// *below* the epoch's day start and Rust's `%` would hand back a negative
-    /// remainder - which would then format as a negative hour.
-    fn seconds_since_midnight(&self, offset_hours: i32) -> u64 {
-        let shifted = self.unix_seconds() + i64::from(offset_hours) * 3_600;
-        shifted.rem_euclid(86_400) as u64
-    }
-
-    fn days_since_epoch(&self, offset_hours: i32) -> i64 {
-        (self.unix_seconds() + i64::from(offset_hours) * 3_600).div_euclid(86_400)
-    }
-}
-
-/// Days since 1970-01-01 to a civil `(year, month, day)`.
-///
-/// Howard Hinnant's `civil_from_days`, which is the standard formulation: shift
-/// the epoch to 0000-03-01 so leap days land at the end of the year, then count.
-/// Written out rather than pulled in as a dependency for eleven lines.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    // Shift the epoch so the leap day is the last day of the year.
-    let shifted = days + 719_468;
-    let era = if shifted >= 0 {
-        shifted
-    } else {
-        shifted - 146_096
-    } / 146_097;
-    let day_of_era = shifted - era * 146_097; // 0..=146096
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100); // 0..=365
-    let mp = (5 * day_of_year + 2) / 153; // 0..=11, March = 0
-    let day = (day_of_year - (153 * mp + 2) / 5 + 1) as u32; // 1..=31
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // January = 1
-    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// The `conditions:` section, by the name `%condition:<name>%` writes.
@@ -937,6 +841,7 @@ impl Condition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DEFAULT_AUTOHIDE;
 
     fn animation(interval: u64, texts: &[&str]) -> Animation {
         Animation {
@@ -997,7 +902,7 @@ mod tests {
     /// resolves to [`None`], which is the same as a typo: it would be documented
     /// and it would not work.
     #[test]
-    fn the_every_alias_points_at_a_built_in() {
+    fn every_alias_points_at_a_built_in() {
         for (alias, target) in BUILT_IN_ALIASES {
             assert!(BUILT_INS.contains(&target), "%{target}% is not a built-in");
             assert!(
@@ -1010,10 +915,13 @@ mod tests {
 
     #[test]
     fn an_alias_that_is_not_one_is_left_alone() {
-        assert_eq!(canonical_built_in("time"), "server_time");
-        assert_eq!(canonical_built_in("date"), "server_date");
-        assert_eq!(canonical_built_in("ping"), "ping");
-        assert_eq!(canonical_built_in("nope"), "nope");
+        // `BUILT_IN_ALIASES` is empty since the clock went, so nothing is ever
+        // rewritten - but `canonical_built_in` stays in the pipeline because
+        // PumpkinPIE's own `%player_name%` and siblings are matched on the name
+        // after this, and a no-op here is what makes that safe.
+        for name in ["player", "ping", "nope", "time", "date"] {
+            assert_eq!(canonical_built_in(name), name, "%{name}% was rewritten");
+        }
     }
 
     #[test]
@@ -1035,14 +943,14 @@ mod tests {
     /// up in the unresolved report.
     #[test]
     fn every_built_in_has_an_arm_and_every_arm_is_listed() {
-        const ARMED: [&str; 20] = [
-            "player", "viewer", "ping", "playtime", "world", "uuid", "permission_level", "health",
+        const ARMED: [&str; 17] = [
+            "player", "viewer", "ping", "world", "uuid", "permission_level", "health",
             "gamemode", "player_ip", "bedrock", "group", "online", "max_players", "worldonline",
-            "server_name", "server_time", "server_date", "tps", "mspt",
+            "server_name", "tps", "mspt",
         ];
-        // The two aliases resolve before the match, so they are not arms of their
-        // own - which is exactly why they have to be checked separately.
         let mut expected: Vec<&str> = ARMED.into();
+        // An alias resolves before the match, so it is never an arm of its own -
+        // which is why it is extended in here separately.
         expected.extend(BUILT_IN_ALIASES.iter().map(|(alias, _)| *alias));
         // `BUILT_INS` is in the reading order of the match, not the alphabet.
         let mut listed = BUILT_INS.to_vec();
@@ -1090,153 +998,143 @@ mod tests {
     }
 
     #[test]
-    fn the_date_conversion_agrees_with_the_epoch() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(1), (1970, 1, 2));
-        // 2024-02-29, the day the whole algorithm exists for.
-        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
-        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
-        // 2000-03-01, a century leap year.
-        assert_eq!(civil_from_days(11_017), (2000, 3, 1));
-    }
-
-    #[test]
-    fn the_date_conversion_handles_dates_before_the_epoch() {
-        // The `div_euclid` in the era calculation is what makes this work, and a
-        // server with a wrong clock can produce it.
-        assert_eq!(civil_from_days(-1), (1969, 12, 31));
-        assert_eq!(civil_from_days(-719_468), (0, 3, 1));
-    }
-
-    #[test]
-    fn a_consecutive_run_of_days_is_monotonic() {
-        let mut previous = civil_from_days(0);
-        for day in 1..=(365 * 4 + 1) {
-            let current = civil_from_days(day);
-            let is_next = current.0 == previous.0
-                && current.1 == previous.1
-                && current.2 == previous.2 + 1;
-            assert!(
-                is_next || current > previous,
-                "day {day}: {current:?} does not follow {previous:?}"
-            );
-            previous = current;
-        }
-    }
-
-    #[test]
-    fn the_clock_reads_the_real_time() {
-        let clock = world_clock();
-        assert!((0..86_400).contains(&clock.seconds_since_midnight(0)));
-        let (year, month, day) = civil_from_days(clock.days_since_epoch(0));
-        assert!(
-            year >= 2024,
-            "the clock is not reading the real time: {year}-{month}-{day}"
-        );
-        assert!((1..=12).contains(&month));
-        assert!((1..=31).contains(&day));
-    }
-
-    /// The whole reason `utc-offset-hours` exists: the clock is UTC, the server
-    /// log is not, and an admin has to be able to line them up.
-    ///
-    /// Asserted as a *relationship* between two offsets rather than against "now",
-    /// because an offset is a shift and a shift is only checkable by comparing
-    /// two of them. The day-count check is what catches a `%` that returned a
-    /// negative remainder for a zone behind UTC.
-    #[test]
-    fn an_offset_shifts_the_clock_by_whole_hours() {
-        let clock = world_clock();
-        const DAY: i64 = 86_400;
-        for hours in [-14, -12, -5, -1, 0, 1, 5, 7, 13, 14] {
-            let shown = clock.seconds_since_midnight(hours);
-            assert!((0..86_400).contains(&shown), "{hours}h produced {shown}");
-
-            let expect = (clock.seconds_since_midnight(0) as i64
-                + i64::from(hours) * 3_600)
-                .rem_euclid(DAY);
-            assert_eq!(shown as i64, expect, "{hours}h is not a whole shift of {hours} hours");
-        }
-        // A zone ahead is never behind, in either the time of day or the date,
-        // and one behind is never ahead. A sign error here is invisible in a
-        // screenshot and obvious on a real server.
-        assert!(clock.days_since_epoch(7) >= clock.days_since_epoch(0));
-        assert!(clock.days_since_epoch(-7) <= clock.days_since_epoch(0));
-    }
-
-    /// 12-hour with AM/PM, because that is the shape the server's own log uses and
-    /// two clocks that differ only by am/pm read as broken rather than as formats.
-    ///
-    /// Pinned to exact seconds, which is the point of splitting
-    /// [`format_seconds`] out: midnight and noon are the two hours a 12-hour
-    /// formatter gets wrong, and neither can be reached by a test that reads the
-    /// current time.
-    #[test]
-    fn a_time_is_twelve_hour_with_a_meridiem() {
-        assert_eq!(format_seconds(0), "12:00:00 AM");
-        assert_eq!(format_seconds(12 * 3_600), "12:00:00 PM");
-        assert_eq!(format_seconds(13 * 3_600 + 5 * 60 + 9), "1:05:09 PM");
-        assert_eq!(format_seconds(23 * 3_600 + 59 * 60 + 59), "11:59:59 PM");
-        // The minute before noon, and the minute before midnight: the boundaries
-        // where an off-by-one changes the hour *and* the meridiem.
-        assert_eq!(format_seconds(12 * 3_600 - 1), "11:59:59 AM");
-        assert_eq!(format_seconds(86_399), "11:59:59 PM");
-
-        // Every hour of the day is between 1 and 12, and carries a meridiem.
-        for hour in 0..24 {
-            let shown = format_seconds(hour * 3_600);
-            let number: u32 = shown[..shown.find(':').expect("an hour")].parse().expect("a number");
-            assert!((1..=12).contains(&number), "hour {hour} printed {number}: {shown}");
-            assert!(
-                shown.ends_with(" AM") || shown.ends_with(" PM"),
-                "hour {hour} printed {shown}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unresolved_optional_prefix_is_blanked_but_a_typo_is_not() {
+    fn an_unresolved_optional_placeholder_is_hidden_but_a_typo_is_not() {
+        let shipped = shipped_autohide();
         // The shipped case: no PumpkinPerm, no PumpkinPIE.
         assert_eq!(
-            blank_unresolved_prefix("%perm_prefix%blockrnc  Ping: 42ms"),
+            hide_unresolved("%perm_prefix%blockrnc  Ping: 42ms", &shipped),
             "blockrnc  Ping: 42ms"
         );
         // A resolved one is `§`-coded and never matches, so it survives whole.
         assert_eq!(
-            blank_unresolved_prefix("\u{a7}7\u{a7}l[MEMBER] blockrnc"),
+            hide_unresolved("\u{a7}7\u{a7}l[MEMBER] blockrnc", &shipped),
             "\u{a7}7\u{a7}l[MEMBER] blockrnc"
         );
         // Every other placeholder keeps the leave-it-as-written rule.
         assert_eq!(
-            blank_unresolved_prefix("%perm_prefix%%nope_nope%Steve"),
+            hide_unresolved("%perm_prefix%%nope_nope%Steve", &shipped),
             "%nope_nope%Steve"
         );
-        // Nothing to do is the common case and must not reallocate meaningfully.
-        assert_eq!(blank_unresolved_prefix("just a name"), "just a name");
+        // Nothing to do is the common case.
+        assert_eq!(hide_unresolved("just a name", &shipped), "just a name");
+    }
+
+    /// The key is a list, so anything may be listed - and only what is listed is
+    /// ever hidden.
+    #[test]
+    fn only_the_listed_placeholders_are_hidden() {
+        let list = vec!["perm_prefix".to_string(), "balance".to_string()];
+        assert_eq!(
+            hide_unresolved("%perm_prefix%%balance%%nope%Steve", &list),
+            "%nope%Steve"
+        );
+        // `nope` is not in the list, so it stays as written.
+        assert_eq!(hide_unresolved("%balance%Steve", &["perm_prefix".to_string()]), "%balance%Steve");
+    }
+
+    #[test]
+    fn an_empty_list_hides_nothing() {
+        assert_eq!(
+            hide_unresolved("%perm_prefix%Steve", &[]),
+            "%perm_prefix%Steve"
+        );
     }
 
     #[test]
     fn an_unresolved_prefix_is_removed_wherever_the_format_puts_it() {
+        let shipped = shipped_autohide();
+        assert_eq!(hide_unresolved("Steve %perm_prefix%", &shipped), "Steve");
+        // Not at the start, so the space after it has to go too.
         assert_eq!(
-            blank_unresolved_prefix("Steve %perm_prefix%"),
-            "Steve"
-        );
-        // Not at the start, so there is no leading space to trim.
-        assert_eq!(
-            blank_unresolved_prefix("Rank: %perm_prefix% - Steve"),
+            hide_unresolved("Rank: %perm_prefix% - Steve", &shipped),
             "Rank: - Steve"
         );
     }
 
+    /// A confusable name is not hidden: `perm_prefix` on its own is not the
+    /// placeholder, and neither is one that merely starts with it.
     #[test]
-    fn a_confusable_name_is_not_blanked() {
-        // `perm_prefix` on its own is not the placeholder, and neither is a
-        // placeholder that merely starts with it.
-        assert_eq!(blank_unresolved_prefix("perm_prefix is a word"), "perm_prefix is a word");
+    fn a_confusable_name_is_not_hidden() {
+        let shipped = shipped_autohide();
         assert_eq!(
-            blank_unresolved_prefix("%perm_prefix_extra%Steve"),
+            hide_unresolved("perm_prefix is a word", &shipped),
+            "perm_prefix is a word"
+        );
+        assert_eq!(
+            hide_unresolved("%perm_prefix_extra%Steve", &shipped),
             "%perm_prefix_extra%Steve"
         );
+    }
+
+    /// The shipped default is the prefix and nothing else, so the behaviour
+    /// works on a server that never writes the key.
+    #[test]
+    fn the_default_is_the_prefix_and_nothing_else() {
+        let shipped = shipped_autohide();
+        assert_eq!(shipped, ["perm_prefix"]);
+        assert_eq!(DEFAULT_AUTOHIDE, ["perm_prefix"]);
+    }
+
+    /// A blank spacer line at either end of a header or footer is an intended empty
+    /// row, not padding to be trimmed.
+    ///
+    /// `hide_unresolved` also runs on the joined header and footer block, so a
+    /// header ending in `''` arrives with a real trailing newline. The old
+    /// unconditional `trim()` deleted those rows - but only when the block also
+    /// held a `%`, so the same header kept its spacer until an unrelated
+    /// placeholder elsewhere stopped resolving.
+    #[test]
+    fn a_blank_spacer_line_survives_an_unresolved_placeholder_elsewhere() {
+        let header = "rule\ntitle\n%unanswered%";
+        // Nothing listed matches, so the block must come back untouched.
+        assert_eq!(hide_unresolved(header, &["perm_prefix".to_string()]), header);
+
+        let header_with_trailing_blank = "rule\ntitle\n%unanswered%\n";
+        assert_eq!(
+            hide_unresolved(header_with_trailing_blank, &["perm_prefix".to_string()]),
+            header_with_trailing_blank,
+            "the trailing blank row is an intended empty line, not padding"
+        );
+
+        let footer_with_leading_blank = "\n/discord\n%unanswered%";
+        assert_eq!(
+            hide_unresolved(footer_with_leading_blank, &["perm_prefix".to_string()]),
+            footer_with_leading_blank
+        );
+
+        // And when something *is* hidden, the surrounding rows still survive.
+        assert_eq!(
+            hide_unresolved("rule\n%perm_prefix%title\n", &["perm_prefix".to_string()]),
+            "rule\ntitle\n"
+        );
+    }
+
+    /// A name spelled the way it appears in a template, `%perm_prefix%`, is the
+    /// same entry as the bare `perm_prefix`. An admin copies placeholders out of
+    /// `format:` and writes them back wrapped, and an autohide that quietly
+    /// matched nothing is indistinguishable from one that is switched off.
+    #[test]
+    fn a_wrapped_spelling_is_the_same_entry_as_a_bare_one() {
+        assert_eq!(
+            hide_unresolved("%perm_prefix%Steve", &["%perm_prefix%".to_string()]),
+            "Steve"
+        );
+        assert_eq!(
+            hide_unresolved("%perm_prefix%Steve", &["perm_prefix".to_string()]),
+            "Steve"
+        );
+    }
+
+    /// An entry that is nothing but delimiters names no placeholder, so it must
+    /// not strip the `%` off every literal on the page.
+    #[test]
+    fn an_entry_of_only_delimiters_hides_nothing() {
+        assert_eq!(hide_unresolved("%player%", &["%".to_string()]), "%player%");
+        assert_eq!(hide_unresolved("%player%", &["%%".to_string()]), "%player%");
+    }
+
+    fn shipped_autohide() -> Vec<String> {
+        DEFAULT_AUTOHIDE.iter().map(|name| (*name).to_string()).collect()
     }
 
     // ---- conditions -------------------------------------------------------

@@ -121,8 +121,6 @@ pub mod bossbar;
 pub mod render;
 /// Asking PumpkinPIE for whatever the built-ins could not answer.
 pub mod pie;
-/// `%playtime%`: how long each player has been connected, across sessions.
-pub mod playtime;
 /// The sidebar.
 pub mod scoreboard;
 /// The plugin's state.
@@ -358,15 +356,13 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
 /// outlive the error. Doing nothing is the right answer there, and it does not
 /// stop the loop from being cancelled by `on_unload`.
 ///
-/// **The elapsed-time bookkeeping is in [`tab::refresh_all`], not here**, even
-/// though this is where the loop lives. It needs the list of players who are
-/// online, and `get_all_players` pushes a **fresh** resource-table entry for
-/// every player on every call (`wasm_host/wit/v0_1/server.rs:108-122`, into
+/// Everything that walks the player list happens in [`tab::refresh_all`], not
+/// here, even though this is where the loop lives. It needs the list of players
+/// who are online, and `get_all_players` pushes a **fresh** resource-table entry
+/// for every player on every call (`wasm_host/wit/v0_1/server.rs:108-122`, into
 /// `state.rs:177`, whose `add` is `resource_table.push` and nothing reuses one).
 /// Asking twice a refresh would double that once a second per player to
-/// re-derive a list `refresh_all` is already walking. The accrual is therefore
-/// driven by the very same repeating task, one call per player, just at the point
-/// that already has the handle.
+/// re-derive a list `refresh_all` is already walking.
 fn tick(server: Server) {
     let Some(snapshot) = state::snapshot() else {
         return;
@@ -445,11 +441,6 @@ impl Plugin for PumpkinTAB {
         let group_count = loaded.config.groups_by_order().len();
         let animation_count = loaded.config.animations.len();
         let refresh = loaded.config.refresh_ticks();
-        // Before `state::install`, and once only: a `/tab reload` re-reads
-        // `config.yml` and nothing else, because re-reading the playtime totals
-        // would throw away every second banked since the plugin loaded - which is
-        // the running total the tab list is showing everybody right now.
-        playtime::install(&folder);
         state::install(loaded.config);
 
         // Just the command node. Groups are *not* registered here: the node that
@@ -483,11 +474,6 @@ impl Plugin for PumpkinTAB {
     }
 
     fn on_unload(&self, _context: Context) -> Result<()> {
-        // Writes the playtime totals before anything else: the totals are the only
-        // thing this plugin has that the server is about to shut down holding.
-        // A clean unload is the last chance to save, and unlike the loop's
-        // thirty-second throttle it costs nothing.
-        playtime::save();
         // Cancels the refresh and empties the bar. Deliberately does not message
         // PumpkinPIE: plugins unload in load order, so the provider's store is
         // already gone and messaging it traps the guest.
@@ -567,7 +553,7 @@ impl pumpkin_plugin_api::EventHandler<PlayerJoinEvent> for OnJoin {
     }
 }
 
-/// Clears a departing player's sidebar row, and banks their playtime.
+/// Clears a departing player's sidebar row.
 struct OnLeave;
 
 impl pumpkin_plugin_api::EventHandler<PlayerLeaveEvent> for OnLeave {
@@ -576,11 +562,6 @@ impl pumpkin_plugin_api::EventHandler<PlayerLeaveEvent> for OnLeave {
         _server: Server,
         event: EventData<PlayerLeaveEvent>,
     ) -> EventData<PlayerLeaveEvent> {
-        // First, and outside everything below. This banks the last slice of their
-        // session and writes the file, and `clear_player` reaches the host from
-        // inside a `with_scoreboard` body - so putting the write after it would
-        // mean a `std::fs` call in the middle of somebody else's lock scope.
-        playtime::player_left(&event.player);
         if let Some(snapshot) = state::snapshot() {
             tab::clear_player(&snapshot, &event.player);
         }
@@ -666,10 +647,12 @@ mod tests {
             assert_eq!(config.refresh_ticks(), asked.max(1));
             assert!(config.refresh_ticks() > 0);
         }
-        // The shipped default is the interesting non-zero case: the derived
-        // `Config::default()` has 0 in this field and only `refresh_ticks` saves
-        // it, so a reload that ever passed the raw field would arm a task with a
-        // zero period.
+        // `Config::default()` is what a config that failed to parse falls back to,
+        // so it has to be a usable interval rather than the `0` a derived
+        // `Default` would leave in the field. Only `refresh_ticks` would otherwise
+        // save it, which means a reload that passed the raw field would arm a task
+        // with a zero period.
         assert_eq!(crate::config::DEFAULT_REFRESH_TICKS, 20);
+        assert_eq!(crate::config::Config::default().refresh_interval_ticks, 20);
     }
 }

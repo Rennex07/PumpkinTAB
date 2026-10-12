@@ -2,15 +2,12 @@
 //!
 //! ## The shape of a refresh
 //!
-//! 1. **Bank the elapsed time.** Once per player, [`playtime::bank`], before
-//!    anything is resolved - so `%playtime%` shows the slice that has just ended
-//!    rather than the one before it.
-//! 2. **Resolve locally.** For every player, build the header, the footer, their
+//! 1. **Resolve locally.** For every player, build the header, the footer, their
 //!    tab-list name and their sidebar row's right-hand text, substituting only the
 //!    built-ins and animations. No inter-plugin messages yet.
-//! 3. **Resolve in one batch.** Every line from step 2 that still holds a
+//! 2. **Resolve in one batch.** Every line from step 2 that still holds a
 //!    placeholder goes to PumpkinPIE in a single message.
-//! 4. **Push.** Sidebar row, header and footer, tab-list name, sort order and
+//! 3. **Push.** Sidebar row, header and footer, tab-list name, sort order and
 //!    latency, and last the bar, which consumes the player handle.
 //!
 //! Splitting it that way is what keeps the cost at one message per refresh rather
@@ -64,7 +61,7 @@ use pumpkin_plugin_api::{Server, player::Player, scoreboard::Scoreboard, text::T
 use tracing::debug;
 
 use crate::{
-    bossbar, groups, pie, playtime,
+    bossbar, groups, pie,
     render::{self, View},
     scoreboard as board,
     state::{self, Snapshot},
@@ -103,11 +100,6 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
         let name = player.get_name();
         let world = player.get_world().get_name();
         let group = groups::resolve(&snapshot.config, player).name.to_string();
-        // Before the `View`, so `%playtime%` resolves to the slice that has just
-        // elapsed rather than the one before it. This is the *whole* of the live
-        // playtime: it is the only thing that banks time, it runs once per player
-        // per refresh, and it reads no handle but this one.
-        playtime::bank(player);
         let view = view_for(snapshot, player, server);
 
         let slots = [
@@ -128,8 +120,6 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
 
     // Once for the whole refresh rather than once per player: the write is
     // throttled, so this is at most one `std::fs` call every thirty seconds.
-    playtime::save_if_due();
-
     // The bar's title is one string for everybody, so it is pushed once, before
     // the per-player work consumes the handles it needs.
     push_bar_title(snapshot, server);
@@ -325,23 +315,46 @@ fn local_line(view: &View<'_>, line: &str) -> String {
 }
 
 /// Everything pushed for one player, other than the sidebar and the bar.
+///
+/// A disabled world is **cleared**, not merely skipped. A header, a footer and a
+/// tab-list name are three pieces of state the *client* keeps, so simply not
+/// pushing them leaves whatever the world had before on screen: a player who
+/// walks from `world` into a disabled one still shows `world`'s header, and the
+/// only way it ever goes away is if some other plugin overwrites it. The
+/// disabled-worlds option therefore has to push nothing actively.
 fn push_player(player: &Player, row: &Row, resolved: &[String], config: &crate::config::Config) {
     if config.header_footer.applies_in(&row.world) {
+        // Autohide is applied here as well as to the tab entry: an unresolved
+        // `%perm_prefix%` in a header is the same literal garbage as one in a
+        // name, and `tab-list.autohide` is documented as covering all three.
         player.set_tab_list_header_footer(
-            component(&at(resolved, row.slots[0])),
-            component(&at(resolved, row.slots[1])),
+            component(&render::hide_unresolved(
+                &at(resolved, row.slots[0]),
+                &config.tab_list.autohide,
+            )),
+            component(&render::hide_unresolved(
+                &at(resolved, row.slots[1]),
+                &config.tab_list.autohide,
+            )),
+        );
+    } else {
+        // Empty on purpose: see above. The setters take a component and have no
+        // "unset" arm, so nothing is the component that says nothing.
+        player.set_tab_list_header_footer(
+            TextComponent::text(""),
+            TextComponent::text(""),
         );
     }
 
     if !config.tab_list.applies_in(&row.world) {
-        // The one silent path in a refresh: a disabled world skips the tab-list
-        // name, the sort order *and* the latency push together. That is what the
-        // config asked for, but `/tab check` reporting it once is a long way from
-        // three setters quietly not happening every second. `debug` and not `warn`
-        // because a disabled world is a deliberate admin choice, not a fault.
+        // As above, and for the same reason: the name has to be taken off rather
+        // than left as whatever the last enabled world wrote.
+        player.set_tab_list_name(None);
         debug!(
-            "{} is in world '{}', which is under tab-list.disabled-worlds, so no tab-list name, \
-             sort order or latency was pushed for them",
+            "{} is in world '{}', which is under tab-list.disabled-worlds, so their tab-list \
+             name was cleared rather than left from the last enabled world. Sort order and \
+             latency keep their last values, which affect where they sit and the bar beside \
+             them but are not this section's to reset",
             row.name,
             row.world
         );
@@ -358,11 +371,7 @@ fn push_player(player: &Player, row: &Row, resolved: &[String], config: &crate::
     // starts at 0, so not pushing it leaves every client showing no bars at all.
     player.set_tab_list_latency(player.get_ping() as i32);
     let entry = at(resolved, row.slots[2]);
-    let entry = if config.tab_list.prefix_optional {
-        render::blank_unresolved_prefix(&entry)
-    } else {
-        entry
-    };
+    let entry = render::hide_unresolved(&entry, &config.tab_list.autohide);
     player.set_tab_list_name(Some(component(&entry)));
 }
 
@@ -376,6 +385,13 @@ fn push_sideboard(
     total: usize,
 ) {
     if !snapshot.owns_world(&row.world) {
+        // Cleared rather than skipped, for the same reason as the header, the
+        // footer and the tab-list name above: a sidebar row is state the client
+        // keeps, so a world that stops being owned would otherwise leave every
+        // row it ever drew on screen with nothing left to take them off.
+        state::with_scoreboard(&row.world, |board: &Scoreboard| {
+            board::clear_row(board, &row.name);
+        });
         return;
     }
     let score = board::player_value(index, snapshot.config.scoreboard.lines.len(), total);

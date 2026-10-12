@@ -2,7 +2,7 @@
 //!
 //! Switched off in the shipped `config.yml`: a sidebar line has no viewer, so
 //! every placeholder worth showing (`%player%`, `%ping%`, `%group%`,
-//! `%perm_prefix%`, `%playtime%`) renders as literal text. Per-viewer rows need
+//! `%perm_prefix%`) renders as literal text. Per-viewer rows need
 //! `Player::send-packet` to accept the scoreboard packets, which is v0.2 plugin
 //! API work. Everything below is then unreachable and stays tested.
 //!

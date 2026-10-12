@@ -42,12 +42,12 @@
 //!
 //! ## What is deliberately not in here
 //!
-//! The playtime totals are [`crate::playtime`]'s own. They outlive a reload, they
-//! are keyed by uuid rather than by anything this module holds, and putting them
-//! in a [`Snapshot`] would mean every refresh cloned a map of every player who
-//! has ever joined. The only thing shared is [`recover`], because the argument for
-//! recovering a poisoned lock is the same argument and there is no reason to
-//! write it down twice.
+//! Nothing per-player. A [`Snapshot`] is cloned once per refresh and walked once
+//! per player, so a field keyed by player - anything that would have to be
+//! updated as each row is pushed - turns a once-a-second clone into a
+//! once-a-second copy of every player who ever joined. The rows themselves are
+//! built and thrown away in [`crate::tab::refresh_all`]; what outlives a refresh
+//! is only what the host holds on our behalf.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -83,9 +83,7 @@ fn config_slot() -> &'static Mutex<Option<Arc<Config>>> {
 /// beats turning one panic into a permanently dead plugin - and it is the
 /// reason this plugin has no `catch_unwind` anywhere.
 ///
-/// `pub(crate)` because [`crate::playtime`] keeps its own lock for the playtime
-/// totals and the same argument applies to it. One copy of the reasoning, not
-/// two that can drift.
+/// `pub(crate)` so the same reasoning is written once rather than twice that drift.
 pub(crate) fn recover<T>(
     result: std::sync::LockResult<MutexGuard<'_, T>>,
 ) -> MutexGuard<'_, T> {

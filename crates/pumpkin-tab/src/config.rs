@@ -24,16 +24,6 @@ use serde::{Deserialize, Serialize};
 /// The file name inside the plugin's data folder.
 pub const CONFIG_FILE: &str = "config.yml";
 
-/// The accumulated playtimes, and the only other file in the data folder.
-///
-/// Here rather than in [`crate::playtime`] because this is where [`CONFIG_FILE`]
-/// lives and the two are one convention: lower case, `.yml`, no directory.
-///
-/// **Not part of the configuration.** It is not parsed into a [`Config`], it is
-/// not in the file an admin edits, and nothing here can validate it - so it does
-/// not belong in this module beyond the name. See [`crate::playtime`].
-pub const PLAYTIME_FILE: &str = "playtime.yml";
-
 /// The shipped `config.yml`, comments and all.
 ///
 /// The file is both the default and the reference, so there is one source of
@@ -69,7 +59,7 @@ pub struct Superseded {
 pub const SUPERSEDED_CONFIGS: &[Superseded] = &[
     Superseded {
         label: "the default whose tab-list.format started with %perm_prefix%",
-        // The file as it was before %perm_prefix% was taken out of 	ab-list.format.
+        // The file as it was before %perm_prefix% was taken out of tab-list.format.
         // PumpkinPerm is not on the market any more, so the shipped default has to
         // work on a server with nothing else installed - and an unanswered placeholder
         // is deliberately left as written rather than blanked, so without this entry
@@ -745,12 +735,26 @@ pub enum OnDisk {
 /// The one liberty taken is line endings, and only line endings. See
 /// [`same_document`].
 pub fn classify(on_disk: &str) -> OnDisk {
-    if same_document(on_disk, DEFAULT_CONFIG) {
+    // The exact comparison is checked first and is not redundant. [`same_document`]
+    // normalises only its right-hand side, so it is **not reflexive**:
+    // `same_document(x, x)` is false for any `x` carrying CRLF, because one side
+    // keeps the `\r` and the other has it stripped - and `include_str!` hands
+    // back `config.yml` exactly as checked out. A CRLF default therefore failed to
+    // match itself and was reported as `Edited`. Being byte-identical to the
+    // shipped default *is* untouched, so this cannot rewrite an admin's file.
+    //
+    // The reference must also be the **right**-hand argument. `same_document`
+    // normalises only that side, because it is the crate-owned default whose line
+    // endings are a property of the checkout, while the left side is the admin's
+    // file and CRLF there means an editor saved it. Passed the other way round, an
+    // admin's CRLF file was normalised and matched a superseded default - so the
+    // one file this module must never rewrite was the one it rewrote.
+    if on_disk == DEFAULT_CONFIG || same_document(on_disk, DEFAULT_CONFIG) {
         return OnDisk::Current;
     }
     SUPERSEDED_CONFIGS
         .iter()
-        .find(|old| same_document(old.text, on_disk))
+        .find(|old| same_document(on_disk, old.text))
         .map_or(OnDisk::Edited, OnDisk::Superseded)
 }
 
@@ -783,6 +787,10 @@ fn same_document(a: &str, b: &str) -> bool {
 
 /// The default refresh, in ticks. 20 ticks is one second.
 pub const DEFAULT_REFRESH_TICKS: u64 = 20;
+
+fn default_refresh_ticks() -> u64 {
+    DEFAULT_REFRESH_TICKS
+}
 
 /// The lowest a refresh interval may be configured to.
 ///
@@ -840,22 +848,39 @@ fn aliased_frames(change_ms: u64, frames: usize, refresh_ticks: u64) -> Option<u
 pub const MAX_LINES: usize = 99;
 
 /// The whole configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+///
+/// `Default` is written out by hand rather than derived: the derived one leaves
+/// `refresh_interval_ticks` at `0`, and that value is the fallback for a
+/// `config.yml` which failed to parse.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Config {
     /// How often the tab list is recomputed and pushed.
+    ///
+    /// `serde`'s `#[serde(default)]` would use `0` for an absent key, and `0` is
+    /// clamped up to [`MIN_REFRESH_TICKS`] rather than treated as "unset" - so a
+    /// config that simply omits the key would run at twenty refreshes a second
+    /// instead of one, and report the clamp as a problem the admin never asked
+    /// about. The default is [`DEFAULT_REFRESH_TICKS`] instead.
+    #[serde(default = "default_refresh_ticks")]
     pub refresh_interval_ticks: u64,
 
-    /// Whole hours to add to UTC for `%time%`, `%server_time%`, `%date%` and
-    /// `%server_date%`. `7` for UTC+7, `-5` for UTC-5.
+    /// Accepted and ignored. The clock is gone; this remains so a `config.yml`
+    /// written while it existed still loads.
     ///
-    /// **Configured rather than detected, because it cannot be detected.** There is
-    /// no clock, timezone or config read anywhere in the plugin WIT - `server.wit`
-    /// has `get-motd` and `get-tps` and no time call - and `SystemTime`, which
-    /// [`crate::render::WorldClock`] reads, is UTC by definition. Without it the
-    /// sidebar shows a different hour from the server log beside it.
+    /// There was no way to keep the clock honest on this WIT. The plugin API
+    /// exposes no time call at all (`server.wit` has `get-motd` and `get-tps`),
+    /// `wasi:clocks/timezone` is marked `@unstable` in the wasmtime revision
+    /// Pumpkin pins and the host does not implement it anyway, and the only clock
+    /// a WASI guest has reads UTC. So the offset had to be typed in by hand, and
+    /// every value of it was a guess the admin had to keep current across daylight
+    /// saving. A wrong guess reads as a broken plugin rather than a wrong setting,
+    /// so the feature went rather than ship that.
     ///
-    /// Whole hours only, and no DST: both would need a timezone database.
+    /// Serde still accepts the key because removing it would make every config
+    /// written for an earlier build fail to load - `deny_unknown_fields` means an
+    /// unknown key is an error, and these configs exist.
+    #[serde(default)]
     pub utc_offset_hours: i32,
 
     /// The header and footer above and below the list.
@@ -895,6 +920,27 @@ pub struct Config {
 
     /// The sidebar.
     pub scoreboard: Scoreboard,
+}
+
+/// Written out rather than derived, because `derive(Default)` would leave
+/// `refresh_interval_ticks` at `0` and `Config::default()` is the fallback for a
+/// `config.yml` that failed to parse. Every other field is spelled out with the
+/// same value its own `Default` produces, so nothing here is a second opinion.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            refresh_interval_ticks: DEFAULT_REFRESH_TICKS,
+            utc_offset_hours: 0,
+            header_footer: HeaderFooter::default(),
+            tab_list: TabList::default(),
+            groups: Vec::new(),
+            op_level_groups: BTreeMap::new(),
+            animations: BTreeMap::new(),
+            conditions: crate::render::Conditions::new(),
+            bossbar: BossBar::default(),
+            scoreboard: Scoreboard::default(),
+        }
+    }
 }
 
 impl Config {
@@ -1162,15 +1208,22 @@ impl HeaderFooter {
     }
 }
 
-/// Each player's own entry in the list.
-/// A `bool` that defaults to on, for keys where the shipped default is `true`.
+/// Placeholders that are removed from the rendered output when nothing answers
+/// them, rather than left on screen as written.
 ///
-/// `serde`'s `#[serde(default)]` would use `false`, and these keys are the ones a
-/// server that has never written them should get switched on.
-fn default_on() -> bool {
-    true
-}
+/// The default is `["perm_prefix"]`, and that default is the whole reason the
+/// key exists. `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and an optional
+/// plugin that is not installed is not a typo - so a server running neither would
+/// otherwise show a literal `%perm_prefix%` in front of every name. Every other
+/// placeholder is still left as written, so a typo stays visible.
+///
+/// Anything listed here is dropped from the tab-list entry, the header and the
+/// footer. An entry is a placeholder name, and the `%` signs are optional: both
+/// `perm_prefix` and `%perm_prefix%` name the same thing, because an admin
+/// copying a placeholder out of `format:` writes the wrapped one.
+pub const DEFAULT_AUTOHIDE: [&str; 1] = ["perm_prefix"];
 
+/// Each player's own entry in the list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TabList {
@@ -1178,22 +1231,22 @@ pub struct TabList {
     pub enabled: bool,
     /// The template for it.
     pub format: String,
-    /// Whether to drop a leading `%perm_prefix%` from the format's output when
-    /// nothing answers it.
+    /// Placeholders removed when nothing answers them. See [`DEFAULT_AUTOHIDE`].
+    #[serde(default = "default_autohide")]
+    pub autohide: Vec<String>,
+    /// Accepted and ignored, for a config written before `autohide` existed.
     ///
-    /// `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and an optional plugin
-    /// that is not installed is not a typo. Whereas an unknown placeholder is left
-    /// as written so a spelling mistake is visible, this one is a known optional
-    /// dependency, so a server running neither shows a bare name instead of a
-    /// literal `%perm_prefix%` in front of every player.
-    ///
-    /// Only the prefix is blanked. Anything else left unresolved is still left as
-    /// written, so the log line naming `%perm_prefix%` as unanswered is the one
-    /// signal that turns it off.
-    #[serde(default = "default_on")]
-    pub prefix_optional: bool,
+    /// `autohide` with its default already blanked `%perm_prefix%`, so this key
+    /// has no separate meaning left. It is still read so an older config does not
+    /// fail to load under `deny_unknown_fields`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_optional: Option<bool>,
     /// Worlds to leave alone. Empty means every world.
     pub disabled_worlds: Vec<String>,
+}
+
+fn default_autohide() -> Vec<String> {
+    DEFAULT_AUTOHIDE.iter().map(|name| (*name).to_string()).collect()
 }
 
 impl Default for TabList {
@@ -1201,7 +1254,8 @@ impl Default for TabList {
         Self {
             enabled: true,
             format: "%player%".to_string(),
-            prefix_optional: true,
+            autohide: default_autohide(),
+            prefix_optional: None,
             disabled_worlds: Vec::new(),
         }
     }
@@ -1406,8 +1460,7 @@ pub struct Scoreboard {
     /// They are rendered **once for everybody**, because the sidebar is the world
     /// scoreboard. So `%player%`, `%ping%` and `%group%` have no viewer to
     /// resolve against and are left in the text as written. Every viewerless
-    /// placeholder works: `%online%`, `%tps%`, `%world%`, `%server_time%`, and
-    /// the rest.
+    /// placeholder works: `%online%`, `%tps%`, `%world%`, and the rest.
     ///
     /// An empty line is a blank row, which is how you space a sidebar out.
     ///
@@ -1456,8 +1509,11 @@ mod tests {
         let config = Config::parse(DEFAULT_CONFIG).expect("the shipped config.yml is valid");
         assert!(config.header_footer.enabled);
         assert_eq!(config.refresh_ticks(), DEFAULT_REFRESH_TICKS);
-        assert!(config.animations.contains_key("logo"));
-        assert!(config.animations.contains_key("clock"));
+        assert!(config.animations.contains_key("logo"), "the shipped config has no logo animation");
+        assert!(
+            config.animations.contains_key("barcolors"),
+            "the shipped config has no barcolors animation, which bossbar.color points at"
+        );
     }
 
     #[test]
@@ -1520,6 +1576,41 @@ mod tests {
                 "{}: an edited comment must be enough to keep the admin's file",
                 old.label,
             );
+
+            // The two calls above pass the superseded text on *both* sides, so
+            // neither can tell which argument `same_document` was given first -
+            // and that order is the whole safety property. The real cases are
+            // asymmetric: the plugin writes `old.text` verbatim, so an untouched
+            // install has whatever line endings the build shipped, while the two
+            // files that must never be rewritten are the admin's.
+            //
+            // An admin's LF file against a CRLF default has to be recognised: it
+            // is the untouched default, so it is the one that should be replaced.
+            let admin_lf = old.text.replace("\r\n", "\n");
+            assert!(
+                matches!(classify(&admin_lf), OnDisk::Superseded(_)),
+                "{}: an untouched default written with LF must still be recognised when this \
+                 build ships CRLF",
+                old.label,
+            );
+
+            // The reverse must NOT be recognised: a file a Windows editor saved
+            // carries CRLF, and rewriting it would destroy whatever the admin did
+            // to it - the one thing this module must never do. Note there is no
+            // added or removed newline here: only the line endings differ.
+            let admin_crlf = old.text.replace('\n', "\r\n");
+            assert_eq!(
+                admin_crlf.replace("\r\n", "\n"),
+                old.text,
+                "this must differ from the default in line endings only"
+            );
+            assert_eq!(
+                classify(&admin_crlf),
+                OnDisk::Edited,
+                "{}: a Windows editor saved this, so it is the admin's file and must not be \
+                 rewritten",
+                old.label,
+            );
         }
     }
 
@@ -1553,6 +1644,73 @@ mod tests {
 
         // A difference in anything else still separates them.
         assert!(!same_document(lf, &lf.replace("20", "40")));
+    }
+
+    /// `classify` has to work whichever line endings the checkout produced,
+    /// because `DEFAULT_CONFIG` is an `include_str!` of a file git may have
+    /// checked out with CRLF. It does not compare the default to itself through
+    /// [`same_document`] alone - that function normalises only one side, so it
+    /// is not reflexive and a CRLF default failed to match itself.
+    ///
+    /// This is checked against the real `DEFAULT_CONFIG` rather than a stub,
+    /// because the bug only appears when the shipped file itself carries CRLF.
+    #[test]
+    fn the_default_matches_itself_however_it_was_checked_out() {
+        // Normalise first, so this test is about the conversion rather than
+        // about how this particular checkout happens to have `config.yml`.
+        let lf = DEFAULT_CONFIG.replace("\r\n", "\n");
+        let checked_out_as_crlf = lf.replace('\n', "\r\n");
+        assert_eq!(
+            classify(&checked_out_as_crlf),
+            OnDisk::Current,
+            "a default checked out with CRLF must still be the current default, not the \
+             admin's own file"
+        );
+        assert_eq!(classify(&lf), OnDisk::Current);
+
+        // The guard still holds when CRLF is on the admin's side of a real
+        // comparison, which is the case the rewrite path actually depends on.
+        assert_eq!(
+            classify(&format!("{DEFAULT_CONFIG}# mine\n")),
+            OnDisk::Edited
+        );
+    }
+
+    /// A config that leaves the interval out gets the documented one, not `0`.
+    ///
+    /// `0` is not inert here: `refresh_ticks` clamps it up to
+    /// [`MIN_REFRESH_TICKS`], so an absent key silently became twenty refreshes a
+    /// second, and `problems()` reported the clamp as a fault the admin never
+    /// made. Both the parse path and the fallback path are checked, because they
+    /// are separate defaults - `#[serde(default = ...)]` and `Config::default()`
+    /// - and only fixing one leaves the other at `0`.
+    #[test]
+    fn an_omitted_refresh_interval_is_the_default_and_not_zero() {
+        let parsed = Config::parse("groups: [default]\n").expect("valid");
+        assert_eq!(parsed.refresh_interval_ticks, DEFAULT_REFRESH_TICKS);
+        assert!(
+            parsed.problems().is_empty(),
+            "a config that simply omits the key should have nothing to report: {:?}",
+            parsed.problems()
+        );
+
+        // The fallback for a config that failed to parse, which never goes
+        // through serde at all.
+        assert_eq!(
+            Config::default().refresh_ticks(),
+            DEFAULT_REFRESH_TICKS,
+            "the fallback must not be twenty refreshes a second"
+        );
+
+        // An explicit `0` is still clamped and still reported, so this change
+        // has not removed the check for a number an admin really did type.
+        let explicit = Config::parse("groups: [default]\nrefresh-interval-ticks: 0\n")
+            .expect("valid");
+        assert_eq!(explicit.refresh_ticks(), MIN_REFRESH_TICKS);
+        assert!(
+            !explicit.problems().is_empty(),
+            "a typed 0 is still the admin's mistake to hear about"
+        );
     }
 
     #[test]
@@ -1601,13 +1759,23 @@ fn the_shipped_groups_point_at_pumpkinperm() {
     }
 }
 
+/// The shipped config sets no `op-level-groups`, deliberately.
+///
+/// The key still works - it is parsed and `groups::resolve` still honours it - but
+/// an operator is not given a group for free here. Op is a server-wide switch
+/// rather than a per-player rank, so mapping it onto the top of this ladder means
+/// everybody who can fly gets the owner tag. A server that wants it writes:
+/// `op-level-groups: {4: owner, 2: admin}`.
 #[test]
-fn the_shipped_config_grants_everything_to_the_top_of_the_ladder() {
-    // An operator is meant to show as an owner without anyone running
-    // /pumpkinperm set, and an admin without being opped.
+fn the_shipped_config_maps_no_op_level() {
     let config = Config::parse(DEFAULT_CONFIG).expect("valid");
-    assert_eq!(config.op_level_groups.get(&MinOpLevel::Four), Some(&"owner".to_string()));
-    assert_eq!(config.op_level_groups.get(&MinOpLevel::Two), Some(&"admin".to_string()));
+    assert!(
+        config.op_level_groups.is_empty(),
+        "the shipped config should not hand a group to an operator by default: {:?}",
+        config.op_level_groups
+    );
+    // An operator still resolves to the fallback rather than to nothing.
+    assert_eq!(config.groups_by_order().last().map(String::as_str), Some(DEFAULT_GROUP));
 }
 
 /// A group prefix would be defined twice - here and in PumpkinPerm - and the two
@@ -1768,12 +1936,14 @@ fn a_sidebar_can_still_be_switched_on_by_hand() {
     );
 }
 
-/// The shipped tab format asks PumpkinPerm for a prefix, which arrives through
-/// PumpkinPIE. Neither is required: `prefix-optional` blanks the placeholder when
-/// nothing answers it, so a server with neither reads `blockrnc  Ping: 42ms`
-/// rather than a literal `%perm_prefix%`.
+/// The shipped tab format works with or without the permission plugin.
 ///
-/// That is the one placeholder blanked rather than left as written. Every other
+/// `%perm_prefix%` needs PumpkinPerm and PumpkinPIE, and an optional plugin that
+/// is not installed is not a typo. `autohide` removes it when nothing answers it,
+/// so a server with neither reads `blockrnc` rather than a literal
+/// `%perm_prefix%`.
+///
+/// That is the one placeholder hidden rather than left as written. Every other
 /// unresolved placeholder is still left on screen, because a typo has to be
 /// visible - and the log line naming `%perm_prefix%` unanswered is what points at
 /// a missing plugin rather than a spelling mistake.
@@ -1786,40 +1956,49 @@ fn the_shipped_tab_format_works_with_or_without_the_permission_plugin() {
          prefix: {}",
         config.tab_list.format
     );
+    // The shipped format carries the prefix, so the key is not a separate feature
+    // the admin has to find.
     assert!(
         config.tab_list.format.contains("%perm_prefix%"),
-        "the shipped format carries the prefix, because it blanks when nothing answers it"
+        "the shipped format should carry the prefix, because it blanks when nothing \
+         answers it"
     );
-    assert!(
-        config.tab_list.prefix_optional,
-        "without this the shipped format leaves a literal placeholder on a bare server"
+    // And the shipped `autohide` really does cover the prefix the format asks
+    // for. Compared through the renderer rather than as a string, because the
+    // config spells it `%perm_prefix%` and the built-in default is `perm_prefix`;
+    // both are the same entry, and what matters is that the shipped pair works
+    // together on a server with neither plugin installed.
+    let format = config.tab_list.format.clone();
+    let unresolved = format.clone();
+    assert_eq!(
+        crate::render::hide_unresolved(&unresolved, &config.tab_list.autohide),
+        "%player%",
+        "the shipped format and autohide must leave a bare name behind"
     );
 }
 
-/// The upgrade case, and the reason `prefix-optional` has a `default = "default_on"`
-/// rather than `#[serde(default)]`.
-///
-/// A `config.yml` written before the key existed has no `prefix-optional:` line,
-/// so it must still come back `true` - an install that shipped with a
-/// `%perm_prefix%` in its format and then loaded this build otherwise starts
-/// showing the literal placeholder with no explanation.
+/// The key defaults to on rather than off, because `serde`'s `#[serde(default)]`
+/// would use `false`, and a config that never wrote it would otherwise start
+/// showing the literal placeholder.
 #[test]
-fn a_config_written_before_prefix_optional_still_blanks_the_prefix() {
+fn a_config_written_before_autohide_still_hides_the_prefix() {
     let config = Config::parse(
         "groups: [default]\ntab-list:\n  format: '%perm_prefix%%player%'\n",
     )
     .expect("valid");
-    assert!(
-        config.tab_list.prefix_optional,
-        "an older config must not silently start showing the literal placeholder"
+    assert_eq!(
+        config.tab_list.autohide,
+        ["perm_prefix"],
+        "configs written before the key existed must not start showing the literal \
+         placeholder"
     );
-
-    // And an admin who wants it left as written can still say so.
-    let config = Config::parse(
+    // And the old spelling is accepted rather than refused under
+    // `deny_unknown_fields`, so a config written for the earlier key still loads.
+    let older = Config::parse(
         "groups: [default]\ntab-list:\n  format: '%player%'\n  prefix-optional: false\n",
     )
     .expect("valid");
-    assert!(!config.tab_list.prefix_optional);
+    assert_eq!(older.tab_list.prefix_optional, Some(false));
 }
 
 /// At the default 1000 ms refresh a 100 ms animation of 14 frames advances 10

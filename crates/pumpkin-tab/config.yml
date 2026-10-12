@@ -1,79 +1,32 @@
-# PumpkinTAB - the tab list, header, footer, bossbar and sidebar.
-#
-# Placeholders (all work with no other plugin):
-#   %player% %viewer% %ping% %playtime% %world% %uuid% %health% %gamemode%
-#   %player_ip% %bedrock% %permission_level% %group%
-#   %online% %max_players% %worldonline% %server_name% %tps% %mspt%
-#   %server_time% %time% %server_date% %date%
-#   %animation:<name>%  %condition:<name>%
-# Anything else goes to PumpkinPIE (optional). Nothing that cannot answer is
-# blanked - it is left as written, so a typo shows up.
-#
-# Colours `<red>`..`<white>`, `<#e0b11e>`; styles `<bold>` `<italic>` `<reset>` and
-# `<bold:false>`; `<gradient:#a:#b>` `<rainbow>`. `&7` codes work too.
-#
-# Written once. Rewritten only if still a byte-for-byte copy of an older default
-# that shipped - edit anything, even a comment, and it is yours.
-
-refresh-interval-ticks: 20
-
-# Whole hours to add to UTC for %time% / %server_time% / %date% /
-# %server_date%. `7` for UTC+7, `-5` for UTC-5, `0` to leave it on UTC.
-#
-# This has to be set by hand: there is no clock, timezone or config read
-# anywhere in the plugin API - `server.wit` offers `get-motd` and `get-tps` and
-# not one time call - and the only clock a WASI plugin has reads UTC. So the
-# sidebar would otherwise show a different hour from the server log sitting
-# right next to it. Whole hours only, and no daylight saving: both would need a
-# timezone database, which is the same thing that cannot be read.
-#
-# Times print as `7:04:11 PM`.
-utc-offset-hours: 0
-
-# The overlay has a fixed height: overflow it and the tab list is drawn on top of
-# the header instead of below it, which looks like a doubled name and a bar
-# cutting through the text. This design spends eight rows on header + footer, so
-# trim the two '' spacers first if the list ever collides with the header.
 header-footer:
   enabled: true
   header:
-    # A rule across the top, drawn by striking through a run of spaces. Widen it
-    # if the widest row below outgrows it.
     - '<dark_gray>&m                                      &r'
     - '<aqua><bold>✦ YOURSERVER <reset>✦'
-    # Small caps, not plain capitals: these are Unicode small-capital letters, the
-    # same trick Java TAB's shipped config uses. Substitute your own domain.
     - '<white>ᴘʟᴀʏ.ʏᴏᴜʀꜱᴇʀᴠᴇʀ.ᴄᴏᴍ'
     - ''
-  # No name and no %ping% here: the entry row between the header and the footer
-  # already carries all three, and repeating them prints each one twice in one
-  # glance. %ping% never resolves on Bedrock either - the host only measures
-  # latency on the Java keep-alive - and %bedrock% is what tells you so.
   footer:
     - ''
     - '<aqua>/ᴅɪꜱᴄᴏʀᴅ /ꜱᴛᴏʀᴇ /ᴠᴏᴛᴇ'
     - ''
     - '<#D4D4D4>ᴄᴜʀʀᴇɴᴛʟʏ <white>%online%<#D4D4D4> %condition:players% ᴀʀᴇ ᴄᴏɴɴᴇᴄᴛᴇᴅ'
+
   disabled-worlds: []
+
+# animations usage example:
+#   - '%animation:logo%' # where logo is the name
 
 tab-list:
   enabled: true
-  # %perm_prefix% comes from PumpkinPerm and arrives through PumpkinPIE. Neither is
-  # required: with neither installed the placeholder is removed rather than left
-  # on screen, so a tab entry reads `blockrnc  Ping: 42ms` instead of
-  # `%perm_prefix%blockrnc`. Set `prefix-optional: false` to keep it as written
-  # instead - which is what you want if you are debugging why it is not resolving,
-  # because the log line naming it is the only signal that it is not.
-  #
-  # Both are optional, so this ships with the prefix: `text.rs` leaves a closing
-  # *style* tag as nothing on purpose, so the prefix's colour carries into the
-  # name, which is what a rank prefix is for.
-  prefix-optional: true
-  format: '%perm_prefix%%player% <gray>Ping: <white>%ping%ms'
+  # If you have PIE, you can add more placeholder in the format, such as %ping% or other plugin's expansion.
+  format: '%perm_prefix%%player%'
   disabled-worlds: []
 
-# Highest first, and the position IS the sort order. Keep it the same order as
-# PumpkinPerm's weights - nothing reads their weights, so nothing catches a drift.
+  # if placeholder cannot resolve, will automatically hide it
+  autohide:
+    - '%perm_prefix%'
+
+# Highest first, and the position IS the sort order.
 groups:
   - owner
   - admin
@@ -81,17 +34,8 @@ groups:
   - vip
   - default
 
-# Lets op count as a group with nobody running /pumpkinperm set. Delete the
-# section and op means nothing here.
-op-level-groups:
-  four: owner
-  two: admin
-
-# change-interval is in ms and a frame may itself be a template. It must be a
-# whole multiple of the refresh or the client skips frames out of order: a frame
-# is picked once per refresh and never in between.
 animations:
-  logo:
+  logo: # logo is the name
     change-interval: 1000
     texts:
       - '&d-&3--------------'
@@ -108,7 +52,7 @@ animations:
       - '&3-----------&d-&3---'
       - '&3------------&d-&3--'
       - '&3-------------&d-&3-'
-      - '&3--------------&d-'
+      - '&3--------------&d-&3'
       - '&3-------------&d-&3-'
       - '&3------------&d-&3--'
       - '&3-----------&d-&3---'
@@ -122,12 +66,6 @@ animations:
       - '&3---&d-&3-----------'
       - '&3--&d-&3------------'
       - '&3-&d-&3-------------'
-
-  clock:
-    change-interval: 3000
-    texts:
-      - '&7Time &b%server_time%'
-      - '&7Date &b%server_date%'
 
   barcolors:
     change-interval: 1000
