@@ -1,10 +1,23 @@
 //! The sidebar.
 //!
-//! Switched off in the shipped `config.yml`: a sidebar line has no viewer, so
-//! every placeholder worth showing (`%player%`, `%ping%`, `%group%`,
-//! `%perm_prefix%`) renders as literal text. Per-viewer rows need
-//! `Player::send-packet` to accept the scoreboard packets, which is v0.2 plugin
-//! API work. Everything below is then unreachable and stays tested.
+//! ## Every viewer has their own board
+//!
+//! The board is obtained from `java-player.get-scoreboard`, not
+//! `world.get-scoreboard`. The host backs that with a `ScoreboardProvider::Player`
+//! (`wasm_host/wit/v0_1/scoreboard.rs`), which lazily creates a `Scoreboard` per
+//! player on first write and routes every objective, score and team through it.
+//!
+//! That is the whole difference, and it is what makes a sidebar worth having:
+//! because each board belongs to one reader, a `lines:` entry is resolved **once
+//! per player, with that player as the viewer**. So `%player%`, `%ping%` and
+//! `%group%` answer with the reader's own values, and the same configured line
+//! reads back differently to everybody who sees it.
+//!
+//! ## Lines are shared, so they cannot use a per-player placeholder
+//!
+//! **Superseded - see above.** Lines are no longer rendered once for everybody.
+//! They are queued per player and written to that player's own board, so every
+//! placeholder resolves for the reader.
 //!
 //! ## What the WIT actually allows, and how a free-form line is built
 //!
@@ -60,13 +73,13 @@
 //!
 //! ## The handle is obtained once
 //!
-//! `world.get-scoreboard` pushes a **new** entry into the plugin's resource table
-//! on every call - the host's arm calls `state::add`
-//! (`wasm_host/wit/v0_1/world.rs:749`), which is a `resource_table.push`
-//! (`wasm_host/state.rs:177-179`) - and nothing reuses one. Calling it
-//! every refresh would grow that table for as long as the server is up. The
-//! handle is fetched once and kept, and the world it belongs to is remembered so
-//! a world change re-fetches it rather than writing to the wrong one.
+//! `java-player.get-scoreboard` pushes a **new** entry into the plugin's resource
+//! table on every call - the host's arm calls `add_scoreboard`, which is a
+//! `resource_table.push` - and nothing reuses one, so calling it per refresh would
+//! grow that table for as long as the server is up. One is taken when the player
+//! is first seen and kept, and dropped when they leave, which is what returns the
+//! entry: wit-bindgen gives an owned handle a `Drop` that calls the host's
+//! `[resource-drop]scoreboard`.
 
 use std::collections::BTreeSet;
 

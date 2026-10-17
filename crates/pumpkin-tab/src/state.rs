@@ -66,7 +66,12 @@ static CONFIG: OnceLock<Mutex<Option<Arc<Config>>>> = OnceLock::new();
 static REFRESH: Mutex<Refresh> = Mutex::new(Refresh::IDLE);
 /// The shared bossbar, taken out for the duration of each use.
 static BAR: Mutex<Option<BossBar>> = Mutex::new(None);
-/// The sidebar's scoreboard per world, keyed by world name.
+/// The sidebar's scoreboard per player, keyed by player name.
+///
+/// Keyed by player rather than by world because each viewer gets their own
+/// board: `java-player.get-scoreboard` hands out a handle whose
+/// `ScoreboardProvider` is that one player, which is what makes a placeholder
+/// resolve against them and nobody else.
 ///
 /// A map rather than a `Vec` because the lookup is by name on every refresh, and
 /// because the iteration order has to be stable for the log line.
@@ -108,19 +113,20 @@ pub struct Snapshot {
     /// Without this a deleted line's row would sit on every client's sidebar
     /// forever, because nothing else ever writes that key again.
     pub line_count: usize,
-    /// The worlds that currently have a sidebar.
-    pub scoreboard_worlds: Vec<String>,
+    /// The players who currently have a sidebar, by name.
+    pub scoreboard_players: Vec<String>,
 }
 
 impl Snapshot {
-    /// Whether `world` has a sidebar this plugin writes to.
+    /// Whether `player` has a sidebar this plugin writes to.
     ///
-    /// The handle is per world, so a player in a world that was excluded, or that
-    /// did not exist when the handles were taken, must not be written to.
-    pub fn owns_world(&self, world: &str) -> bool {
-        self.scoreboard_worlds
+    /// The handle belongs to one player, so somebody who has not been given one -
+    /// a Bedrock client, or a player the board has not been built for yet - must
+    /// not be written to.
+    pub fn owns_player(&self, player: &str) -> bool {
+        self.scoreboard_players
             .iter()
-            .any(|cached| cached.eq_ignore_ascii_case(world))
+            .any(|cached| cached.eq_ignore_ascii_case(player))
     }
 }
 
@@ -163,7 +169,7 @@ pub fn snapshot() -> Option<Snapshot> {
         clock: clock(),
         teams: recover(TEAMS.lock()).clone(),
         line_count: line_count(),
-        scoreboard_worlds: recover(BOARDS.lock()).keys().cloned().collect(),
+        scoreboard_players: recover(BOARDS.lock()).keys().cloned().collect(),
     })
 }
 
@@ -288,16 +294,34 @@ pub fn teams() -> BTreeSet<String> {
     recover(TEAMS.lock()).clone()
 }
 
-/// Installs the sidebar handles, one per world that shows it.
+/// Installs the sidebar handles, one per player that shows it.
 ///
-/// Every `world.get-scoreboard` pushes a **new** entry into the plugin's resource
-/// table and nothing reuses one, so these are fetched once per world and kept for
-/// as long as the server is up rather than per refresh.
+/// Every `java-player.get-scoreboard` pushes a **new** entry into the plugin's
+/// resource table and nothing reuses one, so these are fetched once per player and
+/// kept for as long as that player is here rather than per refresh. wit-bindgen
+/// gives each owned handle a `Drop` that calls the host's `[resource-drop]`, so
+/// the table entries come back when a handle is dropped - which is what
+/// [`forget_player`] is for.
 ///
-/// Replacing the map wholesale is what makes a reload that *added* a world pick
-/// it up: the old handles are dropped and the new set built.
+/// Replacing the map wholesale is what makes a reload pick up a changed set: the
+/// old handles are dropped and the new set built.
 pub fn set_scoreboards(boards: BTreeMap<String, Scoreboard>) {
     *recover(BOARDS.lock()) = boards;
+}
+
+/// Installs one player's handle, adding to whatever is already there.
+///
+/// Per player rather than replacing the map, because a joining player gains a
+/// board without disturbing the ones everybody else already has.
+pub fn insert_scoreboard(player: String, board: Scoreboard) {
+    recover(BOARDS.lock()).insert(player, board);
+}
+
+/// Drops one player's handle, so their board goes with them.
+///
+/// The handle is dropped, and with it the host's resource-table entry for it.
+pub fn forget_player(player: &str) {
+    recover(BOARDS.lock()).remove(player);
 }
 
 /// How many sidebar handles exist, for the startup log.
@@ -305,9 +329,9 @@ pub fn scoreboard_count() -> usize {
     recover(BOARDS.lock()).len()
 }
 
-/// Whether a sidebar handle still has to be obtained for any world.
+/// Whether the sidebar is on, so a refresh knows to write it.
 pub fn needs_scoreboard() -> bool {
-    config().is_some_and(|config| config.scoreboard.enabled) && recover(BOARDS.lock()).is_empty()
+    config().is_some_and(|config| config.scoreboard.enabled)
 }
 
 /// Records the teams the sidebar created.
@@ -338,8 +362,8 @@ pub fn with_scoreboard<R>(world: &str, body: impl FnOnce(&Scoreboard) -> R) -> O
     Some(out)
 }
 
-/// The worlds that currently have a sidebar, in a stable order.
-pub fn scoreboard_worlds() -> Vec<String> {
+/// The players who currently have a sidebar, in a stable order.
+pub fn scoreboard_players() -> Vec<String> {
     recover(BOARDS.lock()).keys().cloned().collect()
 }
 
@@ -375,30 +399,31 @@ pub fn unload() {
 mod tests {
     use super::*;
 
-    fn snapshot(world: Option<&str>) -> Snapshot {
+    fn snapshot(player: Option<&str>) -> Snapshot {
         Snapshot {
             config: Arc::new(Config::default()),
             clock: clock(),
             teams: BTreeSet::new(),
             line_count: 0,
-            scoreboard_worlds: world.into_iter().map(str::to_string).collect(),
+            scoreboard_players: player.into_iter().map(str::to_string).collect(),
         }
     }
 
     #[test]
-    fn a_snapshot_without_a_world_owns_nothing() {
-        assert!(!snapshot(None).owns_world("world"));
-        assert!(!snapshot(None).owns_world(""));
+    fn a_snapshot_without_a_player_owns_nobody() {
+        assert!(!snapshot(None).owns_player("Steve"));
+        assert!(!snapshot(None).owns_player(""));
     }
 
+    /// The handle belongs to one player, and that is the entire point: another
+    /// player's board must not be written to it, or one player's placeholders
+    /// would resolve against somebody else.
     #[test]
-    fn a_snapshot_owns_only_its_own_world() {
-        // The handle belongs to one world, and a player somewhere else must not
-        // be written to it.
-        let owns = snapshot(Some("world"));
-        assert!(owns.owns_world("world"));
-        assert!(owns.owns_world("WORLD"));
-        assert!(!owns.owns_world("world_nether"));
+    fn a_snapshot_owns_only_its_own_player() {
+        let owns = snapshot(Some("Steve"));
+        assert!(owns.owns_player("Steve"));
+        assert!(owns.owns_player("steve"));
+        assert!(!owns.owns_player("Alex"));
     }
 
     #[test]

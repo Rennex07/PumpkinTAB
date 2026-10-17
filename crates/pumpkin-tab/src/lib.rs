@@ -96,7 +96,7 @@
 //! `204a94ed895f041a845630d5a23c094705a0704e`, plugin WIT
 //! `e0bb97ea48d9857c181356ba14964d47b20d0f56`.
 
-use std::{collections::{BTreeMap, BTreeSet}, sync::OnceLock};
+use std::{collections::BTreeSet, sync::OnceLock};
 
 use pumpkin_plugin_api::{
     Context, Plugin, PluginMetadata, Result, Server,
@@ -251,18 +251,22 @@ fn ensure_bar(snapshot: &state::Snapshot, server: &Server) {
     }
 }
 
-/// The sidebar objectives, one per world that shows it, obtained once and kept.
+/// The sidebar, one board per player, obtained once each and kept.
 ///
-/// Built from the server's world list rather than from a player, so the sidebar
-/// exists before anybody joins and a player in the second world is not left with
-/// no sidebar because the first player happened to be in the first.
+/// A player gets their own scoreboard rather than the world's, because
+/// `java-player.get-scoreboard` returns a handle whose provider is that one
+/// player. That is what lets a line resolve `%perm_prefix%` or `%player%`
+/// against the reader instead of against nobody.
+///
+/// The teams and the objective are the same *names* on every board, so one build
+/// tells us they exist and the rest follow the same shape.
 fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
     if !snapshot.config.scoreboard.enabled {
         // Turning the sidebar off has to take it off the board. Nothing else ever
         // removes the objective, the teams or the rows, so without this a reload to
         // `enabled: false` would leave the last sidebar frozen on every client.
         if let Some(handles) = state::take_scoreboards() {
-            for (world, board) in handles {
+            for (player, board) in handles {
                 for index in 0..state::line_count() {
                     board.remove_score(&scoreboard::line_key(index), scoreboard::OBJECTIVE);
                     board.remove_team(&scoreboard::line_team(index));
@@ -272,7 +276,7 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
                 }
                 board.clear_display_slot(pumpkin_plugin_api::scoreboard::DisplaySlot::Sidebar);
                 board.remove_objective(scoreboard::OBJECTIVE);
-                info!("the sidebar is disabled; the objective was removed from world {world}");
+                info!("the sidebar is disabled; the objective was removed for {player}");
             }
             state::set_objective_exists(false);
             state::set_line_count(0);
@@ -293,24 +297,23 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
     // that shortened `lines:` remove the rows the old config left behind.
     let previous_lines = state::line_count();
     let mut objective_exists = state::objective_exists();
-
-    let mut boards = BTreeMap::new();
     let mut teams = BTreeSet::new();
     let line_count = snapshot.config.scoreboard.lines.len();
 
-    // Deduplicated by name before anything is built. `get_all_worlds` is a list of
-    // handles, and building the same world's sidebar twice would create the
-    // objective twice over, leaving only the second call's rows.
-    let mut wanted: BTreeMap<String, pumpkin_plugin_api::world::World> = BTreeMap::new();
-    for world in server.get_all_worlds() {
-        let name = world.get_name();
-        if snapshot.config.scoreboard.applies_in(&name) {
-            wanted.entry(name).or_insert(world);
+    for player in server.get_all_players() {
+        let name = player.get_name();
+        let world = player.get_world().get_name();
+        // `as_java` rather than assuming: the sidebar is written through the Java
+        // scoreboard API, which Bedrock has a separate and smaller version of.
+        let Some(java) = player.as_java() else {
+            debug!("{name} is not a Java player; the sidebar is skipped for them");
+            continue;
+        };
+        if !snapshot.config.scoreboard.applies_in(&world) {
+            debug!("{name} is in world '{world}', which is under scoreboard.disabled-worlds");
+            continue;
         }
-    }
-
-    for (name, world) in wanted {
-        let handle = world.get_scoreboard();
+        let handle = java.get_scoreboard();
         let made = scoreboard::create(
             &handle,
             &snapshot.config.scoreboard,
@@ -322,30 +325,28 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
             teams = made.teams;
         }
         objective_exists = made.objective_exists;
-        boards.insert(name.clone(), handle);
-        info!(
-            "the sidebar objective '{}' is on the sidebar slot for world {name}, with {} \
-             group team(s) and {line_count} fixed line(s)",
-            scoreboard::OBJECTIVE,
-            teams.len()
-        );
+        state::insert_scoreboard(name.clone(), handle);
     }
 
-    if boards.is_empty() {
-        warn!(
-            "the sidebar is enabled but no world was available; it will be built on the next \
-             refresh"
-        );
+    if teams.is_empty() {
+        // Either nobody is here, or everybody is on a client or in a world the
+        // sidebar is off for. Both are ordinary; the next refresh builds it when
+        // that stops being true.
         // The count still has to be recorded, or the next build would compare the
         // new `lines:` against the count from two config versions ago and leave
         // rows behind.
         state::set_line_count(line_count);
         return;
     }
-    state::set_scoreboards(boards);
     state::set_teams(teams);
     state::set_line_count(line_count);
     state::set_objective_exists(objective_exists);
+    info!(
+        "the sidebar objective '{}' is on the sidebar slot for each player, with {} group \
+         team(s) and {line_count} fixed line(s)",
+        scoreboard::OBJECTIVE,
+        state::teams().len()
+    );
 }
 
 /// Runs the refresh once. The body of the loop armed by [`restart_refresh`].

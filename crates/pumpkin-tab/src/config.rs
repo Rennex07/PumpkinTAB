@@ -1457,15 +1457,25 @@ pub struct Scoreboard {
     /// pipeline as everything else, built-ins first and then PumpkinPIE in one
     /// batch per refresh.
     ///
-    /// They are rendered **once for everybody**, because the sidebar is the world
-    /// scoreboard. So `%player%`, `%ping%` and `%group%` have no viewer to
-    /// resolve against and are left in the text as written. Every viewerless
-    /// placeholder works: `%online%`, `%tps%`, `%world%`, and the rest.
+    /// They are rendered **once per player**, against that player as the viewer,
+    /// because each one has their own sidebar. A `%player%` line reads back
+    /// differently to everybody who sees it.
     ///
     /// An empty line is a blank row, which is how you space a sidebar out.
     ///
     /// Rows are sorted by score, so lines sit above the players and this is the
     /// order they appear in. There is no per-line number to keep in step.
+    ///
+    /// Every player gets their **own** sidebar, and a line is rendered once per
+    /// player with that player as the viewer. So `%player%`, `%ping%`, `%group%`
+    /// and `%perm_prefix%` all resolve, and resolve to different values for
+    /// different players - which is the whole point of a per-viewer board. The
+    /// viewerless placeholders (`%online%`, `%tps%`, `%world%`) work as well.
+    ///
+    /// One consequence worth knowing: because each player has a separate board,
+    /// a line listing every player would show each viewer only their own copy of
+    /// it. The per-player rows at the bottom of the board are the way to show who
+    /// is online, and they are already one row each.
     #[serde(default)]
     pub lines: Vec<String>,
     /// The text on the right of each player row, resolved per player, or
@@ -1893,15 +1903,23 @@ fn an_unknown_render_type_is_reported() {
     );
 }
 
-/// The shipped config has no `scoreboard:` section, because a sidebar line has
-/// no viewer and every placeholder worth showing needs one. Per-viewer rows wait
-/// on Pumpkin's v0.2 plugin API.
+/// The shipped config has no `scoreboard:` section.
+///
+/// It still ships off by default, but the reason has changed and this test records
+/// the new one. Each viewer now has their own board, so every placeholder in a
+/// `lines:` entry resolves against them and there is no longer anything a shipped
+/// sidebar could show as literal text. It stays opt-in because a sidebar that
+/// appears on an existing server unasked is not a welcome surprise, not because
+/// placeholders in it would be broken.
+///
+/// A shipped sidebar **with** per-player placeholders would now be a good default,
+/// and is left as the next thing to decide rather than being ruled out here.
 #[test]
 fn the_shipped_config_ships_no_sidebar_and_that_is_deliberate() {
     let config = Config::parse(DEFAULT_CONFIG).expect("valid");
     assert!(
         !config.scoreboard.enabled,
-        "a shipped sidebar full of unresolvable placeholders is worse than none"
+        "the sidebar stays opt-in, so an existing server does not grow one unasked"
     );
 
     // A `Config` with no `scoreboard:` key is valid, and must not be reported as

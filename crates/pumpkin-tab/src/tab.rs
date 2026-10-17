@@ -77,20 +77,19 @@ struct Row {
     slots: [usize; 3],
     /// Batcher index for the sidebar's right-hand text, if the sidebar is on.
     sidebar: Option<usize>,
+    /// Batcher indices for this player's copy of the fixed lines: the text and
+    /// the number format of each.
+    lines: Vec<[usize; 2]>,
 }
 
 /// Resolves locally, batches through PIE, then pushes, for everybody.
 pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
     let players = server.get_all_players();
     let mut batcher = pie::Batcher::new();
-    let lines = line_slots(snapshot, &mut batcher, server);
 
     if players.is_empty() {
-        // The fixed lines are still written. They belong to the world scoreboard,
-        // not to a player, so a server that has gone empty must not leave whatever
-        // it last showed frozen on the board for whoever joins next.
-        let resolved = batcher.resolve();
-        push_lines(snapshot, &resolved, &lines, 0);
+        // Nothing to write to. Each board belongs to a player, so an empty server
+        // has no board to leave frozen - whoever joins gets a fresh one.
         return;
     }
 
@@ -108,6 +107,9 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
             batcher.add(&name, local_line(&view, &snapshot.config.tab_list.format)),
         ];
         let sidebar = sidebar_slot(snapshot, &mut batcher, &view, &name, &world);
+        // The fixed lines, queued per player. This is what makes a line carrying
+        // `%player%` or `%perm_prefix%` read back differently to each reader.
+        let lines = line_slots(snapshot, &mut batcher, &view, &name);
 
         rows.push(Row {
             name,
@@ -115,6 +117,7 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
             group,
             slots,
             sidebar,
+            lines,
         });
     }
 
@@ -127,14 +130,13 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
     let resolved = batcher.resolve();
     let total = rows.len();
 
-    push_lines(snapshot, &resolved, &lines, total);
-
     // Zipped rather than indexed, so each `Player` is borrowed for the tab list
     // and the sidebar and then *moved* into the bar, which is the only thing that
     // takes it by value. `Player` is neither `Copy` nor `Clone`, so there is no
     // second handle to fall back on.
     for (index, (player, row)) in players.into_iter().zip(rows).enumerate() {
         let right = row.sidebar.map(|slot| at(&resolved, slot));
+        push_lines(snapshot, &row, &resolved, total);
         push_sideboard(snapshot, &player, &row, right.as_deref(), index, total);
         push_player(&player, &row, &resolved, &snapshot.config);
         // Last, because this consumes the handle.
@@ -142,19 +144,25 @@ pub fn refresh_all(server: &Server, snapshot: &Snapshot) {
     }
 }
 
-/// Batches the fixed `lines:`, once per refresh.
+/// Queues one player's copy of the fixed `lines:`.
 ///
 /// Each line contributes two slots, its text and its right-hand value, because
 /// they are separate parts of TAB's syntax and either may be absent.
+///
+/// **Per player, not once for everybody.** Each viewer has their own board, so a
+/// line resolves against the reader and the answer can differ between them -
+/// which is the entire reason for a per-viewer sidebar. Queueing against a blank
+/// viewer, as a shared board would, leaves `%player%` and `%perm_prefix%` as the
+/// literal text they were written as.
 fn line_slots(
     snapshot: &Snapshot,
     batcher: &mut pie::Batcher,
-    server: &Server,
+    view: &View<'_>,
+    viewer: &str,
 ) -> Vec<[usize; 2]> {
     if !snapshot.config.scoreboard.enabled {
         return Vec::new();
     }
-    let view = shared_view(snapshot, server);
     snapshot
         .config
         .scoreboard
@@ -163,16 +171,19 @@ fn line_slots(
         .map(|raw| {
             let line = board::parse_line(raw);
             [
-                batcher.add("", local_line(&view, line.text)),
-                batcher.add("", local_line(&view, line.number_format)),
+                batcher.add(viewer, local_line(view, line.text)),
+                batcher.add(viewer, local_line(view, line.number_format)),
             ]
         })
         .collect()
 }
 
-/// Writes the fixed lines, above the player rows.
-fn push_lines(snapshot: &Snapshot, resolved: &[String], lines: &[[usize; 2]], players: usize) {
-    if lines.is_empty() {
+/// Writes one player's fixed lines, above their own row.
+///
+/// Written per player rather than once per world, so this is the function where
+/// a line's text becomes that reader's copy of it.
+fn push_lines(snapshot: &Snapshot, row: &Row, resolved: &[String], players: usize) {
+    if row.lines.is_empty() || !snapshot.owns_player(&row.name) {
         return;
     }
     let configured: Vec<board::Line<'_>> = snapshot
@@ -183,26 +194,24 @@ fn push_lines(snapshot: &Snapshot, resolved: &[String], lines: &[[usize; 2]], pl
         .map(|raw| board::parse_line(raw))
         .collect();
 
-    for world in &snapshot.scoreboard_worlds {
-        state::with_scoreboard(world, |board: &Scoreboard| {
-            for (index, slots) in lines.iter().enumerate() {
-                let line = &configured[index];
-                let text = at(resolved, slots[0]);
-                let right = at(resolved, slots[1]);
-                if !board::line_is_visible(line, &text, &right) {
-                    board::hide_line(board, index);
-                    continue;
-                }
-                board::set_line(
-                    board,
-                    index,
-                    board::line_score(line, index, lines.len() + players),
-                    &text,
-                    &right,
-                );
+    state::with_scoreboard(&row.name, |board: &Scoreboard| {
+        for (index, slots) in row.lines.iter().enumerate() {
+            let line = &configured[index];
+            let text = at(resolved, slots[0]);
+            let right = at(resolved, slots[1]);
+            if !board::line_is_visible(line, &text, &right) {
+                board::hide_line(board, index);
+                continue;
             }
-        });
-    }
+            board::set_line(
+                board,
+                index,
+                board::line_score(line, index, row.lines.len() + players),
+                &text,
+                &right,
+            );
+        }
+    });
 }
 
 /// Resolves locally, batches through PIE, then pushes, for one player.
@@ -222,6 +231,9 @@ pub fn apply_player(server: &Server, snapshot: &Snapshot, player: &Player) {
         batcher.add(&name, local_line(&view, &snapshot.config.tab_list.format)),
     ];
     let sidebar = sidebar_slot(snapshot, &mut batcher, &view, &name, &world);
+    // The joining player's own copy of the fixed lines, so their sidebar is right
+    // now rather than on the next refresh.
+    let lines = line_slots(snapshot, &mut batcher, &view, &name);
 
     push_bar_title(snapshot, server);
 
@@ -232,9 +244,11 @@ pub fn apply_player(server: &Server, snapshot: &Snapshot, player: &Player) {
         group,
         slots,
         sidebar,
+        lines,
     };
 
     let right = sidebar.map(|slot| at(&resolved, slot));
+    push_lines(snapshot, &row, &resolved, 1);
     push_sideboard(
         snapshot,
         player,
@@ -268,7 +282,9 @@ fn sidebar_slot(
     name: &str,
     world: &str,
 ) -> Option<usize> {
-    if !snapshot.owns_world(world) {
+    // `world` rather than the board: the board is per player, so whether this
+    // player shows a sidebar is a question about where they are standing.
+    if !snapshot.config.scoreboard.applies_in(world) {
         return None;
     }
     let entry = snapshot.config.scoreboard.entry.as_deref()?;
@@ -384,18 +400,18 @@ fn push_sideboard(
     index: usize,
     total: usize,
 ) {
-    if !snapshot.owns_world(&row.world) {
-        // Cleared rather than skipped, for the same reason as the header, the
-        // footer and the tab-list name above: a sidebar row is state the client
-        // keeps, so a world that stops being owned would otherwise leave every
-        // row it ever drew on screen with nothing left to take them off.
-        state::with_scoreboard(&row.world, |board: &Scoreboard| {
+    // A player in a world the sidebar is off for gets their board taken away,
+    // rather than skipped: a sidebar is state the client keeps, so a world that
+    // stops applying would otherwise leave every row it ever drew with nothing
+    // left to remove them.
+    if !snapshot.config.scoreboard.applies_in(&row.world) {
+        state::with_scoreboard(&row.name, |board: &Scoreboard| {
             board::clear_row(board, &row.name);
         });
         return;
     }
     let score = board::player_value(index, snapshot.config.scoreboard.lines.len(), total);
-    state::with_scoreboard(&row.world, |board: &Scoreboard| {
+    state::with_scoreboard(&row.name, |board: &Scoreboard| {
         board::assign_team(board, &snapshot.teams, player, &row.group);
         match right.filter(|text| !text.trim().is_empty()) {
             Some(text) => board::set_row(board, &row.name, score, Some(text)),
@@ -416,18 +432,18 @@ fn push_sideboard(
     });
 }
 
-/// Removes a departing player's sidebar row, so a stale entry is not left behind.
+/// Takes a departing player's sidebar away.
 ///
-/// Only in the world they were in. A player who walked through a portal on the way
-/// out has already had their row written to the new world's sidebar, and removing
-/// it here would blank a row that belongs to somebody else.
+/// Their whole board goes, not just their row: the board belongs to them, and it is
+/// dropped with them so the host's resource-table entry for it comes back. Leaving
+/// it behind would show the next player to use that name a sidebar that is one
+/// refresh out of date.
 pub fn clear_player(snapshot: &Snapshot, player: &Player) {
     let name = player.get_name();
-    let world = player.get_world().get_name();
-    if !snapshot.owns_world(&world) {
-        return;
+    if snapshot.owns_player(&name) {
+        state::with_scoreboard(&name, |board| board::clear_row(board, &name));
     }
-    state::with_scoreboard(&world, |board| board::clear_row(board, &name));
+    state::forget_player(&name);
 }
 
 /// The bar's title and colour, pushed once per refresh.
