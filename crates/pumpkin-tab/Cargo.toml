@@ -16,7 +16,17 @@ crate-type = ["cdylib"]
 # called `init-plugin`, so linking two crates that export one is a
 # duplicate-symbol error.
 pumpkin-pie = { git = "https://github.com/Rennex07/PumpkinPIE", tag = "v0.2.2" }
-pumpkin-plugin-api = "0.2.0"
+# Resolved from crates.io, so a build needs no sibling Pumpkin checkout. The
+# release crate `0.2.0+26.3-26.51` (published 2026-09-29) carries the same WIT
+# generation as the `0.2.0+26.3-26.51` server binary on pumpkinmc.org:
+# verified 2026-10-23, all 46 WIT files are byte-identical to the WIT tree of
+# the Pumpkin release tag `204a94ed8`,
+# `crates/pumpkin-plugin-wit@e0bb97ea48d9857c181356ba14964d47b20d0f56`.
+# The version string still is not a guarantee by itself - Pumpkin kept
+# `0.2.0+26.3-26.51` across a WIT change once, and fork `master` is already
+# another generation (10 of 46 files match) - so the requirement is pinned
+# exact rather than caret.
+pumpkin-plugin-api = "=0.2.0+26.3-26.51"
 serde.workspace = true
 serde_norway.workspace = true
 tracing.workspace = true
