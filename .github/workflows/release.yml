@@ -13,13 +13,8 @@ permissions:
   contents: write
 
 env:
-  # The same three values as ci.yml, and they have to agree. See the comments
-  # there for why the tag rather than `master`, why WIT_TREE rather than the
-  # version string, and why PUMPKIN_DIR has to match the `[patch.crates-io]`
-  # path in the root Cargo.toml.
-  PUMPKIN_REPO: Pumpkin-MC/Pumpkin
-  PUMPKIN_REF: 0.2.0+26.3-26.51
-  PUMPKIN_DIR: Pumpkin
+  # The same WIT_TREE as ci.yml, and it has to agree. See the comments there
+  # for why the version string is not enough and what the tree hash is.
   WIT_TREE: e0bb97ea48d9857c181356ba14964d47b20d0f56
 
 jobs:
@@ -29,47 +24,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone the plugin API the component is built against
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
-          git clone --depth 1 --branch $env:PUMPKIN_REF "https://github.com/$env:PUMPKIN_REPO" $dest
-          "Cloned $env:PUMPKIN_REPO@$env:PUMPKIN_REF into $dest"
-
+      # The compatibility check, made explicit. The crate is resolved from
+      # crates.io, so this is what the build actually resolves.
       - name: Verify the plugin WIT matches the pinned tree
+        id: wit
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
-          $actual = git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1'
-          "WIT tree: $actual"
-          if ($actual -ne $env:WIT_TREE) {
-            throw "the plugin WIT at $env:PUMPKIN_REF is $actual, not $env:WIT_TREE"
-          }
+        run: tools/check-wit.ps1
 
       - name: Install the wasm32-wasip2 target
         run: rustup target add wasm32-wasip2
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: >-
-            PumpkinTAB -> target
-            ${{ env.PUMPKIN_DIR }} -> target
+          workspaces: PumpkinTAB -> target
 
       - name: Test
         run: cargo test
 
       - name: Build
         run: cargo build --release --target wasm32-wasip2
-
-      - name: Record the Pumpkin revision
-        id: pumpkin
-        shell: pwsh
-        run: |
-          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
-          "sha=$(git -C $dest rev-parse HEAD)" >> $env:GITHUB_OUTPUT
-          "wit=$(git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1')" >> $env:GITHUB_OUTPUT
 
       # The Market wants the version without a leading `v`, and the tag carries
       # one. `inputs.tag` takes priority because a `workflow_dispatch` run has no
@@ -97,9 +70,8 @@ jobs:
             `plugins` directory, next to `pumpkin_pie_plugin.wasm` and
             `pumpkin_perm.wasm` if you use them.
 
-            Built against `${{ env.PUMPKIN_REPO }}@$env:PUMPKIN_REF` at
-            `${{ steps.pumpkin.outputs.sha }}`, plugin WIT
-            `${{ steps.pumpkin.outputs.wit }}`.
+            Built against `pumpkin-plugin-api` `${{ steps.wit.outputs.api }}` from
+            crates.io, plugin WIT `${{ steps.wit.outputs.wit }}`.
 
             ## On first start, approve the data folder
 
@@ -166,9 +138,8 @@ jobs:
           api-token: ${{ secrets.MARKET_API_TOKEN }}
           track: stable
           release-notes: |
-            Built against `${{ env.PUMPKIN_REPO }}@$env:PUMPKIN_REF` at
-            `${{ steps.pumpkin.outputs.sha }}`, plugin WIT
-            `${{ steps.pumpkin.outputs.wit }}`.
+            Built against `pumpkin-plugin-api` `${{ steps.wit.outputs.api }}` from
+            crates.io, plugin WIT `${{ steps.wit.outputs.wit }}`.
 
             Groups come from a permission plugin rather than from here. `groups:`
             is a list of names, highest first, and the position *is* the sort
@@ -184,7 +155,7 @@ jobs:
             and any other placeholder.
 
             Compatibility is not by version number. Pumpkin kept the
-            `${{ env.PUMPKIN_REF }}` version string while changing its plugin WIT,
+            `0.2.0+26.3-26.51` version string while changing its plugin WIT,
             so a server and this component can both claim the same version and
             still disagree. A mismatch shows as `type-checking export func
             'handle-event'` and nothing else.

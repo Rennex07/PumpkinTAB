@@ -7,27 +7,29 @@ on:
   workflow_dispatch:
 
 env:
-  # The Pumpkin revision whose `pumpkin-plugin-api` this is built against.
+  # The plugin WIT that the component is built against.
   #
-  # This is a release TAG, not `master`, and that matters. The marketplace serves
-  # the published release, so the component has to be built against the WIT in
-  # that release. Upstream `master` has a different WIT — commit 5746077df
-  # (#3568) added an AI event to `event.wit` — and a component built against it
-  # fails to load on the release with a bare
+  # The `pumpkin-plugin-api` crate is resolved from crates.io, so the build
+  # needs no sibling checkout of Pumpkin and anyone can build this plugin
+  # without one. What still has to be checked is that the published crate
+  # carries the WIT of the release the server runs.
+  #
+  # This is a release, not `master`, and that matters. Upstream `master` has a
+  # different WIT - commit 5746077df (#3568) added an AI event to `event.wit` -
+  # and a component built against it fails to load on the release with a bare
   # "type-checking export func 'handle-event'" and no explanation.
   #
-  # `nightly` shares the release's WIT, so this build also covers nightly.
-  #
-  # Bump PUMPKIN_REF, PUMPKIN_DIR and WIT_TREE together. The patch path in the
-  # root Cargo.toml is `../Pumpkin`, so PUMPKIN_DIR has to match it or the build
-  # silently resolves nothing.
-  PUMPKIN_REPO: Pumpkin-MC/Pumpkin
-  PUMPKIN_REF: 0.2.0+26.3-26.51
-  PUMPKIN_DIR: Pumpkin
-  # The tree hash of crates/pumpkin-plugin-wit/v0.1 at PUMPKIN_REF. This is the
-  # only thing that actually decides whether a component loads: Pumpkin kept the
+  # The version string cannot be used to check that either: Pumpkin kept the
   # `0.2.0+26.3-26.51` version string across a WIT change, so a server and a
   # component can both report the same version and still disagree.
+  #
+  # Bump the `pumpkin-plugin-api` requirement in the manifests and WIT_TREE
+  # together. `tools/check-wit.ps1` reads the version from the requirement, so
+  # there is only one place to bump the version.
+  #
+  # The tree hash of crates/pumpkin-plugin-wit/v0.1 in the matching Pumpkin
+  # release. This is the only thing that actually decides whether a component
+  # loads.
   WIT_TREE: e0bb97ea48d9857c181356ba14964d47b20d0f56
 
 permissions:
@@ -40,39 +42,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cloned rather than checked out with `path:`, because that input nests the
-      # repository *inside* the workspace, and the `[patch.crates-io]` in the root
-      # Cargo.toml points at a sibling of the workspace.
-      - name: Clone the plugin API the component is built against
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
-          git clone --depth 1 --branch $env:PUMPKIN_REF "https://github.com/$env:PUMPKIN_REPO" $dest
-          "Cloned $env:PUMPKIN_REPO@$env:PUMPKIN_REF into $dest at $(git -C $dest rev-parse HEAD)"
-
       # The compatibility check, made explicit. A drifting WIT is the one failure
       # that a green build does not catch, because the component still compiles.
       - name: Verify the plugin WIT matches the pinned tree
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dest = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) $env:PUMPKIN_DIR
-          $actual = git -C $dest rev-parse 'HEAD:crates/pumpkin-plugin-wit/v0.1'
-          "WIT tree: $actual"
-          "expected: $env:WIT_TREE"
-          if ($actual -ne $env:WIT_TREE) {
-            throw "the plugin WIT at $env:PUMPKIN_REF is $actual, not $env:WIT_TREE. A component built against it will not load on a server from that tag; update PUMPKIN_REF and WIT_TREE deliberately, not automatically."
-          }
+        run: tools/check-wit.ps1
 
       - name: Install the wasm32-wasip2 target
         run: rustup target add wasm32-wasip2
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: >-
-            PumpkinTAB -> target
-            ${{ env.PUMPKIN_DIR }} -> target
+          workspaces: PumpkinTAB -> target
 
       - name: Test
         run: cargo test
