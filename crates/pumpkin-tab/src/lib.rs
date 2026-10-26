@@ -305,14 +305,15 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
         let world = player.get_world().get_name();
         // `as_java` rather than assuming: the sidebar is written through the Java
         // scoreboard API, which Bedrock has a separate and smaller version of.
-        let Some(java) = player.as_java() else {
-            debug!("{name} is not a Java player; the sidebar is skipped for them");
-            continue;
-        };
+
         if !snapshot.config.scoreboard.applies_in(&world) {
             debug!("{name} is in world '{world}', which is under scoreboard.disabled-worlds");
             continue;
         }
+        let Some(java) = player.as_java() else {
+            debug!("{name} is not a Java player; the sidebar is skipped for them");
+            continue;
+        };
         let handle = java.get_scoreboard();
         let made = scoreboard::create(
             &handle,

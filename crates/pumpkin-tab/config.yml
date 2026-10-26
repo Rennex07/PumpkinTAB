@@ -99,3 +99,35 @@ bossbar:
   health: 1.0
   division: 'no-division'
   disabled-worlds: []
+
+# <text>||<number format>||<score>, any part optional. '' is a blank row, a line
+# whose placeholders all come back empty is hidden. A client draws at most 15.
+#
+# THE ONE PLACE WITH NO VIEWER. One set of rows serves the whole world, so
+# %player% %ping% %playtime% %group% print as written - which reads as a broken
+# row rather than a typo. Every server-wide placeholder works here. That is why
+# Rank, Balance, Kills, Deaths, Claim and Playtime all carry no value, and why
+# there is no per-player row either - `entry` below is empty on purpose.
+#
+# A plugin that answers any of those rows does so by name: whatever it registers
+# goes here as `%<its-name>%`.
+#
+# Ping is on the tab entry, which does have a viewer. Showing it here as well
+# reads as a repeat rather than a convenience.
+scoreboard:
+  enabled: true
+  title: '<aqua><bold>✦ YOURSERVER <reset>✦'
+  lines:
+    - '<gray>%time% <#7F7F7F>|<gray> %date%'
+    - ''
+    - '<aqua>| <gray>Rank:'
+    - '<aqua>| <gray>Balance:'
+    - '<aqua>| <gray>Kills:'
+    - '<aqua>| <gray>Deaths:'
+    - '<aqua>| <gray>Claim'
+    - '<aqua>| <gray>Playtime'
+    - ''
+    - '<white>ᴘʟᴀʏ.ʏᴏᴜʀꜱᴇʀᴠᴇʀ.ᴄᴏᴍ'
+  render-type: 'integer'
+  entry: ''
+  disabled-worlds: []
