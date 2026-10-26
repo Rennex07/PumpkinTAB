@@ -118,7 +118,7 @@ scoreboard:
   enabled: true
   title: '<aqua><bold>✦ YOURSERVER <reset>✦'
   lines:
-    - '<gray>%time% <#7F7F7F>|<gray> %date%'
+    - '<gray>Online: <white>%online%'
     - ''
     - '<aqua>| <gray>Rank:'
     - '<aqua>| <gray>Balance:'

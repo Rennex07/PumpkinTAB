@@ -342,12 +342,6 @@ fn ensure_scoreboard(snapshot: &state::Snapshot, server: &Server) {
     state::set_teams(teams);
     state::set_line_count(line_count);
     state::set_objective_exists(objective_exists);
-    info!(
-        "the sidebar objective '{}' is on the sidebar slot for each player, with {} group \
-         team(s) and {line_count} fixed line(s)",
-        scoreboard::OBJECTIVE,
-        state::teams().len()
-    );
 }
 
 /// Runs the refresh once. The body of the loop armed by [`restart_refresh`].
