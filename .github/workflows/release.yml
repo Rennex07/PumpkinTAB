@@ -138,7 +138,4 @@ jobs:
           api-token: ${{ secrets.MARKET_API_TOKEN }}
           track: stable
           release-notes: |
-            Bug fixes and stability improvements.
-
-            Built against `pumpkin-plugin-api` `${{ steps.wit.outputs.api }}`, plugin
-            WIT `${{ steps.wit.outputs.wit }}`.
+            Fixed the boss bar not returning after a player rejoins, improved nested conditions, and corrected group order for operator-level mappings.
