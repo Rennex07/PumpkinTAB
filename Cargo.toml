@@ -9,7 +9,7 @@ version = "0.2.4"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0-only"
-authors = ["Rennex"]
+authors = ["Rennex07"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
