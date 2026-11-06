@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-tab"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pumpkin-pie",
  "pumpkin-plugin-api",
