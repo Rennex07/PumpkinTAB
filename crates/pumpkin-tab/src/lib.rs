@@ -399,7 +399,7 @@ impl Plugin for PumpkinTAB {
         PluginMetadata {
             name: PLUGIN.to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            authors: vec!["Rennex".to_string()],
+            authors: vec!["Rennex07".to_string()],
             description: "A tab list for Pumpkin: groups, sorting, animations, a header and \
                           footer, a bossbar and a sidebar."
                 .to_string(),
